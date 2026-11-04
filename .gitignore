@@ -1,0 +1,20 @@
+# Godot
+.godot/
+*.translation
+export_credentials.cfg
+
+# Builds
+build/
+
+# Helper binaries (downloaded separately, see README); keep the folders' .gdignore
+bin/*
+!bin/.gdignore
+bin-linux-arm64/*
+!bin-linux-arm64/.gdignore
+
+# Personal data: YouTube login cookies
+cookies.txt
+
+# OS
+.DS_Store
+Thumbs.db
