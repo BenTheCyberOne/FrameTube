@@ -57,7 +57,7 @@ func saved_projection(url: String) -> int:
 
 
 ## Move (or add) the video to the top of the history.
-func touch(url: String, title: String, duration: float) -> void:
+func touch(url: String, title: String, duration: float, channel := "", views := 0) -> void:
 	var h := find(url)
 	if h.is_empty():
 		h = {"id": video_id(url), "url": url, "pos": 0.0, "projection": -1}
@@ -65,6 +65,10 @@ func touch(url: String, title: String, duration: float) -> void:
 		history.erase(h)
 	h.title = title
 	h.duration = duration
+	if channel != "":
+		h.channel = channel
+	if views > 0:
+		h.views = views
 	h.watched_at = Time.get_unix_time_from_system()
 	history.push_front(h)
 	if history.size() > MAX_HISTORY:

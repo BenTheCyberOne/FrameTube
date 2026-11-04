@@ -170,10 +170,18 @@ func _run_autotest() -> void:
 		if shots != "" and (sec == seek_at - 1 or sec == quit_at):
 			var path := shots.path_join("shot_%02ds.png" % sec)
 			get_viewport().get_texture().get_image().save_png(path)
+			viewport.get_texture().get_image().save_png(shots.path_join("panel_%02ds.png" % sec)) # menu, flat
 			print("[test] screenshot ", path)
 		if sec == seek_at:
 			print("[test] seeking to ", seek_to)
 			engine.seek(seek_to)
+		if sec == int(opts.get("history-at", "-1")): # fake some watch progress on the current results
+			for i in mini(3, search_results.size()):
+				var r: Dictionary = search_results[i]
+				var url: String = "https://www.youtube.com/watch?v=" + r.id
+				store.touch(url, r.title, r.duration, r.channel, r.get("views", 0))
+				store.set_position(url, r.duration * (0.25 + 0.25 * i))
+			_on_feed("history")
 		if sec == int(opts.get("replay-at", "-1")):
 			print("[test] re-opening the same video (should resume)")
 			_play(opts.play)
@@ -806,12 +814,13 @@ func _on_feed(key: String) -> void:
 		search_results = []
 		for h in store.history:
 			search_results.append({"id": h.id, "url": h.url, "title": h.title, "duration": h.get("duration", 0.0),
-				"channel": "", "resume": store.resume_position(h.url)})
+				"channel": h.get("channel", ""), "views": int(h.get("views", 0)),
+				"resume": store.resume_position(h.url)})
 		ui.show_results(search_results)
-		ui.set_status("%d videos in history." % search_results.size() if not search_results.is_empty() else "History is empty.")
+		ui.set_status("Pick up where you left off." if not search_results.is_empty() else "Nothing watched yet.")
 		return
 	_search_request += 1
-	ui.set_status("Loading %s..." % key.replace("_", " "))
+	ui.set_status("Loading...")
 	_run_async(func(): return YouTube.feed(key), _on_search_done.bind(_search_request))
 
 
@@ -1030,7 +1039,7 @@ func _on_resolved(r: Dictionary, id: int, url: String, start: float, keep_projec
 		_set_projection(saved) # user corrected the guess for this video before
 	else:
 		_set_projection(YouTube.guess_projection(r))
-	store.touch(url, r.title, r.duration)
+	store.touch(url, r.title, r.duration, r.get("channel", ""), int(r.get("views", 0)))
 	ui.set_title("%s   (%dx%d %s)" % [r.title, r.width, r.height, r.vcodec.get_slice(".", 0)])
 
 

@@ -39,7 +39,9 @@ const TEXT_DIM := Color(0.62, 0.66, 0.75)
 
 var accent := Color(0.3, 0.64, 1.0)
 var input: LineEdit
-var results: ItemList
+var results_scroll: ScrollContainer
+var results_grid: GridContainer
+var thumbs: Thumbs
 var status_label: Label
 var title_label: Label
 var clock_label: Label
@@ -52,6 +54,7 @@ var screen_btn: Button
 var swap_btn: CheckButton
 var keyboard: VBoxContainer
 var browse_page: VBoxContainer
+var player_box: VBoxContainer # now-playing + controls; hidden until a video has been opened
 var settings_page: VBoxContainer
 var setup_page: VBoxContainer
 var setup_text: Label
@@ -144,11 +147,19 @@ func _ready() -> void:
 		b.theme_type_variation = &"ChipButton"
 		disc.add_child(b)
 
-	results = ItemList.new()
-	results.size_flags_vertical = SIZE_EXPAND_FILL
-	results.text_overrun_behavior = TextServer.OVERRUN_TRIM_ELLIPSIS
-	results.item_selected.connect(func(i: int): result_chosen.emit(i))
-	browse_page.add_child(results)
+	# Results: two columns of video cards in a scroll area (thumbstick / mouse wheel scrolls it).
+	results_scroll = ScrollContainer.new()
+	results_scroll.size_flags_vertical = SIZE_EXPAND_FILL
+	results_scroll.horizontal_scroll_mode = ScrollContainer.SCROLL_MODE_DISABLED
+	browse_page.add_child(results_scroll)
+	results_grid = GridContainer.new()
+	results_grid.columns = 2
+	results_grid.size_flags_horizontal = SIZE_EXPAND_FILL
+	results_grid.add_theme_constant_override("h_separation", 12)
+	results_grid.add_theme_constant_override("v_separation", 12)
+	results_scroll.add_child(results_grid)
+	thumbs = Thumbs.new()
+	add_child(thumbs)
 
 	# --- Settings page
 	settings_page = VBoxContainer.new()
@@ -209,8 +220,12 @@ func _ready() -> void:
 	setup_page.add_child(setup_retry)
 
 	# --- Now playing + player controls (always visible)
+	player_box = VBoxContainer.new()
+	player_box.add_theme_constant_override("separation", 12)
+	player_box.visible = false
+	root.add_child(player_box)
 	var np := HBoxContainer.new()
-	root.add_child(np)
+	player_box.add_child(np)
 	title_label = Label.new()
 	title_label.text_overrun_behavior = TextServer.OVERRUN_TRIM_ELLIPSIS
 	title_label.size_flags_horizontal = SIZE_EXPAND_FILL
@@ -222,9 +237,10 @@ func _ready() -> void:
 	status_label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	status_label.max_lines_visible = 2
 	root.add_child(status_label)
+	root.move_child(status_label, player_box.get_index())
 
 	var seek_row := HBoxContainer.new()
-	root.add_child(seek_row)
+	player_box.add_child(seek_row)
 	slider = HSlider.new()
 	slider.size_flags_horizontal = SIZE_EXPAND_FILL
 	slider.size_flags_vertical = SIZE_SHRINK_CENTER
@@ -242,7 +258,7 @@ func _ready() -> void:
 
 	var ctl := HBoxContainer.new()
 	ctl.add_theme_constant_override("separation", 8)
-	root.add_child(ctl)
+	player_box.add_child(ctl)
 	ctl.add_child(_button("-30s", func(): seek_relative.emit(-30.0)))
 	ctl.add_child(_button("-10s", func(): seek_relative.emit(-10.0)))
 	play_btn = _button("Play", func(): play_pause_pressed.emit())
@@ -257,7 +273,7 @@ func _ready() -> void:
 
 	var view := HBoxContainer.new()
 	view.add_theme_constant_override("separation", 8)
-	root.add_child(view)
+	player_box.add_child(view)
 	proj_btn = _button("Video type: Normal", func(): projection_pressed.emit())
 	proj_btn.size_flags_horizontal = SIZE_EXPAND_FILL
 	view.add_child(proj_btn)
@@ -372,7 +388,14 @@ func apply_accent(c: Color) -> void:
 	th.set_color("font_placeholder_color", "LineEdit", TEXT_DIM * Color(1, 1, 1, 0.7))
 	th.set_color("caret_color", "LineEdit", accent)
 
-	# Results list
+	# Video cards
+	th.set_type_variation("CardButton", "Button")
+	th.set_stylebox("normal", "CardButton", StyleBoxEmpty.new()) # the card panel underneath draws the resting look
+	th.set_stylebox("hover", "CardButton", _sb(accent * Color(1, 1, 1, 0.14), 18, accent, 2, 0))
+	th.set_stylebox("pressed", "CardButton", _sb(accent * Color(1, 1, 1, 0.3), 18, accent, 2, 0))
+	th.set_stylebox("hover_pressed", "CardButton", _sb(accent * Color(1, 1, 1, 0.3), 18, accent, 2, 0))
+
+	# Results list (legacy)
 	th.set_stylebox("panel", "ItemList", _sb(Color(0, 0, 0, 0.25), 16, Color(1, 1, 1, 0.06), 1, 10))
 	th.set_stylebox("focus", "ItemList", StyleBoxEmpty.new())
 	th.set_stylebox("hovered", "ItemList", _sb(SURFACE_HOVER, 10))
@@ -469,19 +492,172 @@ func set_setting(key: String, value: String) -> void:
 		_setting_btns[key].text = value
 
 
-## items: {title, duration, channel, [resume]}
+## items: {id, title, [duration, channel, views, description, live, verified, resume]}
 func show_results(items: Array) -> void:
-	results.clear()
-	for it in items:
-		var dur := "  ·  %s" % _fmt(it.duration) if it.get("duration", 0) > 0 else ""
-		var ch: String = it.get("channel", "")
-		var resume := "   ›  resume at %s" % _fmt(it.resume) if it.get("resume", 0) > 0 else ""
-		var by := "     %s" % ch if ch != "" else ""
-		results.add_item("%s%s%s%s" % [it.title, by, dur, resume])
+	thumbs.cancel_pending()
+	for c in results_grid.get_children():
+		c.queue_free()
+	for i in items.size():
+		results_grid.add_child(_make_card(items[i], i))
+	results_scroll.scroll_vertical = 0
 	show_page(false)
 
 
+const THUMB := Vector2(240, 135)
+
+## One result: [thumbnail with VR badges / duration / live tag / resume bar] [title, channel · views, snippet]
+## The card is a PanelContainer (so it grows to fit its content) with a transparent Button stacked on
+## top that takes the clicks and draws the hover/pressed highlight.
+func _make_card(it: Dictionary, index: int) -> PanelContainer:
+	var card := PanelContainer.new()
+	card.size_flags_horizontal = SIZE_EXPAND_FILL
+	card.add_theme_stylebox_override("panel", _sb(Color(1, 1, 1, 0.035), 18, Color(1, 1, 1, 0.06), 1, 12))
+
+	var row := HBoxContainer.new()
+	row.add_theme_constant_override("separation", 16)
+	card.add_child(row)
+
+	# Thumbnail, clipped to rounded corners by its (opaque: the clip uses its alpha) panel.
+	var frame := PanelContainer.new()
+	frame.custom_minimum_size = THUMB
+	frame.size_flags_vertical = SIZE_SHRINK_CENTER # stays 16:9 even when the text makes the card taller
+	frame.clip_children = CanvasItem.CLIP_CHILDREN_AND_DRAW
+	frame.add_theme_stylebox_override("panel", _sb(Color(0.13, 0.14, 0.18, 1.0), 12, Color(0, 0, 0, 0), 0, 0))
+	row.add_child(frame)
+	var pic := TextureRect.new()
+	pic.expand_mode = TextureRect.EXPAND_IGNORE_SIZE
+	pic.stretch_mode = TextureRect.STRETCH_KEEP_ASPECT_COVERED
+	pic.custom_minimum_size = THUMB
+	frame.add_child(pic)
+	thumbs.fetch(str(it.get("id", "")), pic.set_texture)
+	var overlay := Control.new() # chips drawn over the picture
+	frame.add_child(overlay)
+	var dur: float = it.get("duration", 0.0)
+	if it.get("live", false):
+		overlay.add_child(_corner(_chip("LIVE", Color(0.85, 0.12, 0.15), Color.WHITE, Vector2.ZERO), false))
+	elif dur > 0.0:
+		overlay.add_child(_corner(_chip(_fmt(dur), Color(0, 0, 0, 0.78), Color.WHITE, Vector2.ZERO), true))
+	var resume: float = it.get("resume", 0.0)
+	if resume > 0.0 and dur > 0.0: # how far you got, like YouTube's red bar
+		var bar_bg := ColorRect.new()
+		bar_bg.color = Color(1, 1, 1, 0.25)
+		bar_bg.position = Vector2(0, THUMB.y - 5)
+		bar_bg.size = Vector2(THUMB.x, 5)
+		overlay.add_child(bar_bg)
+		var bar := ColorRect.new()
+		bar.color = accent
+		bar.position = bar_bg.position
+		bar.size = Vector2(THUMB.x * clampf(resume / dur, 0.03, 1.0), 5)
+		overlay.add_child(bar)
+
+	# Text
+	var text := VBoxContainer.new()
+	text.size_flags_horizontal = SIZE_EXPAND_FILL
+	text.add_theme_constant_override("separation", 4)
+	row.add_child(text)
+	var title := Label.new()
+	title.text = it.get("title", "")
+	title.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	title.max_lines_visible = 2
+	title.text_overrun_behavior = TextServer.OVERRUN_TRIM_ELLIPSIS
+	title.add_theme_font_size_override("font_size", 25)
+	title.custom_minimum_size.x = 50 # let it wrap instead of widening the card
+	text.add_child(title)
+	var meta := PackedStringArray()
+	if str(it.get("channel", "")) != "":
+		meta.append(it.channel + (" ✓" if it.get("verified", false) else ""))
+	if int(it.get("views", 0)) > 0:
+		meta.append(_views(int(it.views)))
+	if resume > 0.0:
+		meta.append("resume at " + _fmt(resume))
+	if not meta.is_empty():
+		var m := Label.new()
+		m.text = "  ·  ".join(meta)
+		m.text_overrun_behavior = TextServer.OVERRUN_TRIM_ELLIPSIS
+		m.custom_minimum_size.x = 50
+		m.add_theme_font_size_override("font_size", 21)
+		m.add_theme_color_override("font_color", TEXT_DIM)
+		text.add_child(m)
+	var desc := str(it.get("description", ""))
+	if desc != "":
+		var dl := Label.new()
+		dl.text = desc
+		dl.text_overrun_behavior = TextServer.OVERRUN_TRIM_ELLIPSIS
+		dl.custom_minimum_size.x = 50
+		dl.add_theme_font_size_override("font_size", 19)
+		dl.add_theme_color_override("font_color", TEXT_DIM * Color(1, 1, 1, 0.75))
+		text.add_child(dl)
+	# VR / resolution badges on the thumbnail's top-left corner
+	var badges := YouTube.title_badges(str(it.get("title", "")), false)
+	if not badges.is_empty():
+		var bx := HBoxContainer.new()
+		bx.add_theme_constant_override("separation", 5)
+		bx.position = Vector2(8, 8)
+		for b in badges:
+			bx.add_child(_chip(b, accent.darkened(0.35) * Color(1, 1, 1, 0.92), Color.WHITE, Vector2.ZERO))
+		overlay.add_child(bx)
+
+	_ignore_mouse(row)
+	var hit := Button.new() # on top of everything: the whole card is one big button
+	hit.theme_type_variation = &"CardButton"
+	hit.focus_mode = FOCUS_NONE
+	hit.pressed.connect(func(): result_chosen.emit(index))
+	card.add_child(hit)
+	return card
+
+
+## Small rounded label: durations, LIVE, VR/resolution badges.
+func _chip(text: String, bg: Color, fg: Color, pos: Vector2, border := Color(0, 0, 0, 0)) -> PanelContainer:
+	var p := PanelContainer.new()
+	var sb := _sb(bg, 8, border, 1 if border.a > 0.0 else 0, 0)
+	sb.content_margin_left = 9
+	sb.content_margin_right = 9
+	sb.content_margin_top = 2
+	sb.content_margin_bottom = 2
+	p.add_theme_stylebox_override("panel", sb)
+	p.position = pos
+	var l := Label.new()
+	l.text = text
+	l.add_theme_font_size_override("font_size", 18)
+	l.add_theme_color_override("font_color", fg)
+	p.add_child(l)
+	return p
+
+
+## Pin a chip to the thumbnail's bottom-right (or bottom-left) corner; it grows away from the corner.
+func _corner(c: Control, right: bool) -> Control:
+	c.anchor_top = 1.0
+	c.anchor_bottom = 1.0
+	c.anchor_left = 1.0 if right else 0.0
+	c.anchor_right = c.anchor_left
+	var m := 8.0
+	c.offset_top = -m
+	c.offset_bottom = -m
+	c.offset_left = -m if right else m
+	c.offset_right = c.offset_left
+	c.grow_vertical = Control.GROW_DIRECTION_BEGIN
+	c.grow_horizontal = Control.GROW_DIRECTION_BEGIN if right else Control.GROW_DIRECTION_END
+	return c
+
+
+func _ignore_mouse(n: Node) -> void:
+	if n is Control:
+		n.mouse_filter = MOUSE_FILTER_IGNORE
+	for c in n.get_children():
+		_ignore_mouse(c)
+
+
+static func _views(n: int) -> String:
+	if n >= 1_000_000:
+		return "%s M views" % (("%.1f" % (n / 1e6)).trim_suffix(".0"))
+	if n >= 1000:
+		return "%s K views" % (("%.1f" % (n / 1e3)).trim_suffix(".0") if n < 10000 else str(n / 1000))
+	return "%d view%s" % [n, "" if n == 1 else "s"]
+
+
 func update_playback(pos: float, dur: float, paused: bool, playing: bool) -> void:
+	if playing and not player_box.visible:
+		player_box.visible = true
 	play_btn.text = "Pause" if playing and not paused else "Play"
 	if not _dragging:
 		slider.max_value = maxf(dur, 1.0)

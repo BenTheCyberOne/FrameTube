@@ -44,13 +44,39 @@ static func list(target: String, count := 30) -> Dictionary:
 		var channel := _str(e, "channel")
 		if channel == "":
 			channel = _str(e, "uploader")
+		var verified = e.get("channel_is_verified")
 		results.append({
 			"id": _str(e, "id"),
 			"title": _str(e, "title", "(untitled)"),
 			"duration": _num(e, "duration"),
 			"channel": channel,
+			"views": int(_num(e, "view_count")),
+			"description": _str(e, "description").replace("\n", " ").strip_edges(),
+			"live": _str(e, "live_status") == "is_live",
+			"verified": verified is bool and verified,
 		})
 	return {"results": results}
+
+
+## Quick visual tags from the title (search results don't carry projection or resolution metadata).
+static func title_badges(title: String, live := false) -> PackedStringArray:
+	var t := title.to_lower()
+	var b := PackedStringArray()
+	if live:
+		b.append("LIVE")
+	if _matches("\\bvr ?180\\b|\\b180 ?(°|degrees?|vr|3d)", t):
+		b.append("VR180")
+	elif _matches("\\b360\\b", t):
+		b.append("360°")
+	if _matches("\\b3d\\b|stereo", t):
+		b.append("3D")
+	if _matches("\\b(16|12|8) ?k\\b", t):
+		b.append("8K+")
+	elif _matches("\\b(5\\.7|6) ?k\\b", t):
+		b.append("5.7K")
+	elif _matches("\\b4 ?k\\b|\\buhd\\b|2160p", t):
+		b.append("4K")
+	return b
 
 
 ## Picks the best video stream up to max_height (preferring VP9, which ffmpeg decodes fast)
@@ -85,8 +111,12 @@ static func resolve(url: String, max_height: int) -> Dictionary:
 	var headers = v.get("http_headers", {})
 	var live = data.get("is_live")
 	var ua: String = str(headers.get("User-Agent", "")) if headers is Dictionary else ""
+	var ch := _str(data, "channel")
 	return {
 		"probe": probe_vr(_str(v, "url"), ua),
+		"id": _str(data, "id"),
+		"channel": ch if ch != "" else _str(data, "uploader"),
+		"views": int(_num(data, "view_count")),
 		"title": _str(data, "title", "(untitled)"),
 		"duration": _num(data, "duration"),
 		"is_live": live is bool and live,
