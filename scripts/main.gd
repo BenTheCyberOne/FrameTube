@@ -2,7 +2,7 @@ extends Node3D
 ## FrameTube: builds the scene in code. Runs in OpenXR when a runtime is available,
 ## otherwise in a desktop test mode (right-drag to look, click the panel).
 
-const PROJECTIONS := ["Flat", "Flat 3D (SBS)", "360", "360 3D (top/bottom)", "180", "180 3D (SBS)", "360 (cubemap)"]
+const PROJECTIONS := ["Normal", "3D side-by-side", "360°", "360° 3D", "180°", "180° 3D", "360° (YouTube cube)"]
 const QUALITIES := [1080, 1440, 2160, 2880, 4320]
 const PANEL_PX := Vector2i(1500, 1050)
 const PANEL_M := Vector2(1.5, 1.05)
@@ -43,8 +43,16 @@ var account_idx := 0
 var _save_timer := 0.0
 var current_url := ""
 var _last_info := {}
+var setup: ToolSetup
+var _updated_after_error := false
+var _last_search := ""
+var _autotest_running := false
+var _hint: Label3D
+var _hint_shown := false
+var _last_panel_use := 0.0
 var search_results: Array = []
-var _request := 0
+var _request := 0 # video loads
+var _search_request := 0 # searches/feeds (separate, so a search never cancels a video load)
 var _ptr_pos := Vector2.ZERO
 var _ptr_down := false
 var _scroll_accum := 0.0
@@ -77,9 +85,15 @@ func _ready() -> void:
 
 	_load_settings()
 	_set_projection(YouTube.FLAT)
-	ui.keyboard.visible = xr_mode
-	ui.set_status("Checking for yt-dlp and ffmpeg...")
-	_run_async(Bin.versions, _on_versions)
+	ui.auto_keyboard = xr_mode # VR: on-screen keyboard pops up when you tap the search box
+	setup = ToolSetup.new()
+	add_child(setup)
+	setup.progress.connect(_on_setup_progress)
+	setup.finished.connect(_on_setup_finished)
+	ui.setup_retry_pressed.connect(_on_setup_retry)
+	ui.discover_pressed.connect(_search)
+	engine.playback_started.connect(_on_playback_started)
+	_check_setup.call_deferred() # after _run_autotest has had a chance to set _autotest_running
 	# Tracking isn't valid on the first frames; recenter once the headset pose settles.
 	get_tree().create_timer(0.6).timeout.connect(_recenter)
 	_run_autotest()
@@ -95,6 +109,14 @@ func _run_autotest() -> void:
 			var kv := a.substr(2).split("=", true, 1)
 			opts[kv[0]] = kv[1] if kv.size() > 1 else "1"
 	if not opts.has("play"):
+		return
+	_autotest_running = not opts.has("welcome") # --welcome: keep the real startup list + menu auto-hide
+	if opts.has("setup-test"): # --setup-test: run the real first-run download into user://bin, then quit
+		_repair()
+		var ok: Array = await setup.finished
+		print("[setup] finished ok=%s msg=%s" % [ok[0], ok[1]])
+		print("[setup] installed: ", DirAccess.get_files_at(ToolSetup.install_dir()))
+		get_tree().quit()
 		return
 	# Tests don't touch the real settings/history unless asked (--persist), and start from 0 by default.
 	store.persist = opts.has("persist")
@@ -134,6 +156,8 @@ func _run_autotest() -> void:
 		_on_resolved(info, _request, opts.file, 0.0, opts.has("projection"))
 		if opts.has("projection"):
 			_set_projection(int(opts.projection))
+	elif opts.has("welcome") and opts.play == "x":
+		pass # startup shows its own list
 	elif opts.has("search"):
 		_search(str(opts.search))
 	elif opts.has("feed"):
@@ -576,6 +600,7 @@ func _ptr_move(px: Vector2) -> void:
 
 func _ptr_button(pressed: bool) -> void:
 	_ptr_down = pressed
+	_last_panel_use = Time.get_ticks_msec() / 1000.0 # (auto-hide leaves the menu alone while you use it)
 	var e := InputEventMouseButton.new()
 	e.position = _ptr_pos
 	e.global_position = _ptr_pos
@@ -639,7 +664,7 @@ func _set_projection(p: int) -> void:
 	projection = p
 	video_mat.set_shader_parameter("mode", p)
 	var flat := p <= YouTube.FLAT_SBS
-	screen.visible = flat
+	screen.visible = flat and current_url != "" # no empty black rectangle before the first video
 	envs.set_flat(flat)
 	sphere.visible = not flat
 	_resize_screen()
@@ -718,6 +743,8 @@ func _on_setting(key: String) -> void:
 		"bloom":
 			envs.set_bloom(not envs.bloom)
 			store.set_setting("bloom", envs.bloom)
+		"repair":
+			_repair()
 	_refresh_setting_labels()
 
 
@@ -771,7 +798,7 @@ func _apply_account() -> void:
 	if YouTube.cookies_file() != "":
 		ui.set_account("cookies.txt")
 	else:
-		ui.set_account(ACCOUNTS[account_idx].capitalize() if ACCOUNTS[account_idx] != "" else "none")
+		ui.set_account(ACCOUNTS[account_idx].capitalize() if ACCOUNTS[account_idx] != "" else "Not signed in")
 
 
 func _on_feed(key: String) -> void:
@@ -783,9 +810,9 @@ func _on_feed(key: String) -> void:
 		ui.show_results(search_results)
 		ui.set_status("%d videos in history." % search_results.size() if not search_results.is_empty() else "History is empty.")
 		return
-	_request += 1
+	_search_request += 1
 	ui.set_status("Loading %s..." % key.replace("_", " "))
-	_run_async(func(): return YouTube.feed(key), _on_search_done.bind(_request))
+	_run_async(func(): return YouTube.feed(key), _on_search_done.bind(_search_request))
 
 
 func _save_position() -> void:
@@ -809,15 +836,123 @@ func _notification(what: int) -> void:
 
 # --- Search / playback --------------------------------------------------------------------------
 
-func _on_versions(v: Dictionary) -> void:
-	var missing := PackedStringArray()
-	for tool_name in v:
-		if v[tool_name] == "":
-			missing.append(tool_name)
+## Startup: make sure the video helpers exist (download them on first run), then get going.
+func _check_setup() -> void:
+	ui.set_status("Starting up...")
+	_run_async(ToolSetup.missing_tools, _on_missing_checked)
+
+
+func _on_missing_checked(missing: PackedStringArray) -> void:
 	if missing.is_empty():
-		ui.set_status("Ready. yt-dlp %s | %s" % [v["yt-dlp"], v["ffmpeg"].get_slice(" Copyright", 0)])
+		_on_ready_to_use()
 	else:
-		ui.set_status("Missing: %s. Put the executables in the bin folder next to the app, or on PATH." % ", ".join(missing))
+		_run_setup(missing)
+
+
+func _run_setup(tools: PackedStringArray) -> void:
+	if not panel.visible:
+		_toggle_panel()
+	ui.show_setup(true)
+	ui.set_status("")
+	ui.set_setup_progress("Starting download...", 0.0)
+	setup.install(tools)
+
+
+func _on_setup_progress(text: String, fraction: float) -> void:
+	ui.set_setup_progress(text, fraction)
+
+
+func _on_setup_finished(ok: bool, message: String) -> void:
+	if not ok:
+		ui.set_setup_failed(message)
+		return
+	ui.show_setup(false)
+	_on_ready_to_use()
+
+
+func _on_setup_retry() -> void:
+	_run_async(ToolSetup.missing_tools, _on_missing_checked)
+
+
+## Settings > Repair: re-download every helper.
+func _repair() -> void:
+	_run_setup(PackedStringArray(["yt-dlp", "ffmpeg", "deno"]))
+
+
+func _on_ready_to_use() -> void:
+	ui.set_status("")
+	_run_async(Bin.versions, _on_versions)
+	# Keep yt-dlp fresh in the background (YouTube changes often).
+	if ToolSetup.update_due(int(store.get_setting("ytdlp_checked", 0))):
+		store.set_setting("ytdlp_checked", int(Time.get_unix_time_from_system()))
+		_run_async(ToolSetup.update_ytdlp, _ignore)
+	# Something to look at straight away: what you were watching, or a Discover topic.
+	if _autotest_running:
+		return
+	if not store.history.is_empty():
+		_on_feed("history")
+		ui.set_status("Welcome back! Pick up where you left off, or tap a Discover topic.")
+	else:
+		_search(UIPanel.DISCOVER[0][1], "Here are some VR videos to get you started. Tap one to play!")
+
+
+## A failed load: say what happened in plain words. If it looks like YouTube changed something,
+## update yt-dlp once and retry automatically.
+func _handle_error(raw: String, retry: Callable) -> void:
+	push_warning("yt-dlp: " + raw)
+	var e := YouTube.friendly_error(raw)
+	if e.update and not _updated_after_error:
+		_updated_after_error = true
+		ui.set_status("Updating FrameTube's YouTube helper, one moment...")
+		_run_async(ToolSetup.update_ytdlp, _retry_after_update.bind(retry))
+		return
+	ui.set_status(e.message)
+
+
+func _retry_after_update(_ok: bool, retry: Callable) -> void:
+	retry.call()
+
+
+func _on_versions(v: Dictionary) -> void:
+	ui.set_about("FrameTube  ·  yt-dlp %s  ·  %s" % [v["yt-dlp"], v["ffmpeg"].get_slice(" Copyright", 0)])
+
+
+func _ignore(_result: Variant) -> void:
+	pass
+
+
+## When a video starts: tuck the menu away after a moment so it doesn't block the view (unless you're
+## using it). The first time, show how to get it back.
+func _on_playback_started() -> void:
+	if _autotest_running:
+		return
+	var started_at := Time.get_ticks_msec() / 1000.0
+	await get_tree().create_timer(3.0).timeout
+	if not panel.visible or _last_panel_use > started_at or ui.keyboard.visible:
+		return
+	_toggle_panel()
+	if not bool(store.get_setting("menu_hint_shown", false)):
+		store.set_setting("menu_hint_shown", true)
+		_show_hint("Press B / Y (or Menu) to bring the menu back" if xr_mode else "Press Tab to bring the menu back")
+
+
+func _show_hint(text: String) -> void:
+	if _hint == null:
+		_hint = Label3D.new()
+		_hint.font_size = 44
+		_hint.pixel_size = 0.0012
+		_hint.outline_size = 10
+		_hint.no_depth_test = true
+		_hint.billboard = BaseMaterial3D.BILLBOARD_ENABLED
+		_hint.position = Vector3(0, -0.28, -1.2)
+		camera.add_child(_hint)
+	_hint.text = text
+	_hint.modulate = Color(1, 1, 1, 1)
+	_hint.visible = true
+	var tw := create_tween()
+	tw.tween_interval(4.0)
+	tw.tween_property(_hint, "modulate:a", 0.0, 1.0)
+	tw.tween_callback(func(): _hint.visible = false)
 
 
 func _on_submit(text: String) -> void:
@@ -831,21 +966,29 @@ func _on_submit(text: String) -> void:
 		_search(text)
 
 
-func _search(query: String) -> void:
-	_request += 1
-	ui.set_status("Searching for \"%s\"..." % query)
-	_run_async(func(): return YouTube.search(query), _on_search_done.bind(_request))
+func _search(query: String, done_message := "") -> void:
+	_search_request += 1
+	_last_search = query
+	ui.set_status("Searching...")
+	_run_async(func(): return YouTube.search(query), _on_search_done.bind(_search_request, done_message))
 
 
-func _on_search_done(r: Dictionary, id: int) -> void:
-	if id != _request:
+func _on_search_done(r: Dictionary, id: int, done_message := "") -> void:
+	if id != _search_request:
 		return
 	if r.has("error"):
-		ui.set_status(r.error)
+		if r.error.begins_with("This needs your YouTube account"):
+			ui.set_status(r.error)
+		else:
+			_handle_error(r.error, func(): _search(_last_search))
 		return
+	_updated_after_error = false
 	search_results = r.results
 	ui.show_results(search_results)
-	ui.set_status("%d results. Pick one to play." % search_results.size())
+	if search_results.is_empty():
+		ui.set_status("Nothing found. Try other words.")
+	else:
+		ui.set_status(done_message if done_message != "" else "Tap a video to play it.")
 
 
 func _on_result_chosen(i: int) -> void:
@@ -856,6 +999,8 @@ func _on_result_chosen(i: int) -> void:
 
 ## start < 0 means "resume from history if there's a saved position".
 func _play(url: String, start := -1.0, keep_projection := false) -> void:
+	if setup.busy:
+		return # helpers still downloading; the setup screen is up
 	_save_position() # remember where we were in the previous video
 	_request += 1
 	if start < 0.0:
@@ -869,9 +1014,9 @@ func _on_resolved(r: Dictionary, id: int, url: String, start: float, keep_projec
 	if id != _request:
 		return
 	if r.has("error"):
-		ui.set_status(r.error)
-		push_warning("resolve failed: " + r.error)
+		_handle_error(r.error, func(): _play(url, start, keep_projection))
 		return
+	_updated_after_error = false
 	current_url = url
 	_last_info = r
 	engine.open(r, start)

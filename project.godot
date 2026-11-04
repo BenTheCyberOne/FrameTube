@@ -4,9 +4,18 @@ config_version=5
 [application]
 
 config/name="FrameTube"
-config/description="YouTube / YouTube VR player for Steam Frame (personal use)"
+config/description="YouTube and YouTube VR player for Steam Frame"
 run/main_scene="res://main.tscn"
 config/features=PackedStringArray("4.7", "Mobile")
+config/icon="res://icon.svg"
+config/version="0.1.0"
+boot_splash/bg_color=Color(0.055, 0.06, 0.085, 1)
+boot_splash/show_image=false
+
+[display]
+
+window/size/viewport_width=1280
+window/size/viewport_height=720
 
 [rendering]
 

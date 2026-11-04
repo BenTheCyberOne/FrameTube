@@ -19,9 +19,18 @@ signal feed_pressed(key: String) # "history" | "subscriptions" | "watch_later" |
 signal account_pressed
 signal screen_size_pressed
 signal reset_screen_pressed
-signal setting_pressed(key: String) # "environment" | "toy" | "accent" | "bias" | "bloom"
+signal setting_pressed(key: String) # "environment" | "toy" | "accent" | "bias" | "bloom" | "repair"
+signal discover_pressed(query: String)
+signal setup_retry_pressed
 
 const KEY_ROWS := ["1234567890-", "qwertyuiop=", "asdfghjkl:/", "zxcvbnm.?&_"]
+## One-tap topics so nobody has to type to find something to watch: [label, search query]
+const DISCOVER := [["VR180 3D", "vr180 3d travel experience"], ["360 nature", "360 video nature 8k"],
+	["Roller coasters", "360 roller coaster pov"], ["Space", "360 vr space earth"],
+	["Underwater", "360 underwater vr"], ["Concerts", "vr180 concert live"], ["Relax", "4k relaxing scenery"]]
+const QUALITY_NAMES := {1080: "HD", 1440: "2K", 2160: "4K", 2880: "5K", 4320: "8K"}
+
+var auto_keyboard := false # VR: show the on-screen keyboard whenever the search box is focused
 const BG := Color(0.055, 0.06, 0.085, 0.975) # near-opaque: bright grids (Synthwave) shouldn't show through
 const SURFACE := Color(1, 1, 1, 0.055)
 const SURFACE_HOVER := Color(1, 1, 1, 0.11)
@@ -44,6 +53,11 @@ var swap_btn: CheckButton
 var keyboard: VBoxContainer
 var browse_page: VBoxContainer
 var settings_page: VBoxContainer
+var setup_page: VBoxContainer
+var setup_text: Label
+var setup_bar: ProgressBar
+var setup_retry: Button
+var about_label: Label
 var tab_browse: Button
 var tab_settings: Button
 
@@ -99,9 +113,10 @@ func _ready() -> void:
 	input.placeholder_text = "Search YouTube or paste a URL"
 	input.size_flags_horizontal = SIZE_EXPAND_FILL
 	input.custom_minimum_size.y = 64
-	input.text_submitted.connect(func(t: String): submitted.emit(t))
+	input.text_submitted.connect(_submit)
+	input.focus_entered.connect(func(): if auto_keyboard: keyboard.visible = true)
 	row.add_child(input)
-	var go := _button("Go", func(): submitted.emit(input.text))
+	var go := _button("Search", func(): _submit(input.text))
 	go.theme_type_variation = &"AccentButton"
 	go.custom_minimum_size.x = 100
 	row.add_child(go)
@@ -111,11 +126,23 @@ func _ready() -> void:
 	var feeds := HBoxContainer.new()
 	feeds.add_theme_constant_override("separation", 8)
 	browse_page.add_child(feeds)
-	for f in [["History", "history"], ["Subscriptions", "subscriptions"], ["Watch later", "watch_later"],
-			["Recommended", "recommended"]]:
+	for f in [["Continue watching", "history"], ["Subscriptions", "subscriptions"], ["Watch later", "watch_later"],
+			["For you", "recommended"]]:
 		var b := _button(f[0], feed_pressed.emit.bind(f[1]))
 		b.theme_type_variation = &"ChipButton"
 		feeds.add_child(b)
+
+	var disc := HBoxContainer.new()
+	disc.add_theme_constant_override("separation", 8)
+	browse_page.add_child(disc)
+	var dl := Label.new()
+	dl.text = "Discover"
+	dl.add_theme_color_override("font_color", TEXT_DIM)
+	disc.add_child(dl)
+	for d in DISCOVER:
+		var b := _button(d[0], discover_pressed.emit.bind(d[1]))
+		b.theme_type_variation = &"ChipButton"
+		disc.add_child(b)
 
 	results = ItemList.new()
 	results.size_flags_vertical = SIZE_EXPAND_FILL
@@ -129,14 +156,57 @@ func _ready() -> void:
 	settings_page.size_flags_vertical = SIZE_EXPAND_FILL
 	settings_page.visible = false
 	root.add_child(settings_page)
-	_setting_row("environment", "Environment", "The room around the flat screen")
-	_setting_row("toy", "Fidget toy", "Grab with grip, throw it, swipe it to spin")
-	_setting_row("accent", "Accent colour", "Panel, grid, toy and lighting tint")
-	_setting_row("bias", "Bias lighting", "The video's colours softly light the room")
-	_setting_row("bloom", "Bloom", "Glow on bright things (costs a little GPU)")
-	_setting_row("account", "Account", "Sign-in for subscriptions etc. (Firefox works best)")
-	_setting_row("decoder", "Video decoder", "GPU decoding saves CPU; falls back automatically")
+	_setting_row("environment", "Room", "What's around you when watching normal videos")
+	_setting_row("toy", "Fidget toy", "Grab it with the grip button, throw it, or swipe it to spin")
+	_setting_row("accent", "Colour theme", "Colour of the menu, lights and toy")
+	_setting_row("bias", "Ambient glow", "The video's colours softly light up the room")
+	_setting_row("bloom", "Glow effects", "Turn off if things feel slow")
+	_setting_row("account", "YouTube account",
+		"Sign in to YouTube in this browser on this computer first. Unlocks subscriptions & age-limited videos.")
+	var adv := Label.new()
+	adv.text = "Advanced"
+	adv.set_meta("accent_text", true)
+	settings_page.add_child(adv)
+	_setting_row("decoder", "Video decoding", "GPU is faster; it switches automatically if not supported")
+	_setting_row("repair", "Repair", "Re-download FrameTube's video helpers if videos won't play")
 	settings_page.add_child(_spacer(true))
+	about_label = Label.new()
+	about_label.add_theme_font_size_override("font_size", 20)
+	about_label.add_theme_color_override("font_color", TEXT_DIM)
+	settings_page.add_child(about_label)
+
+	# --- Setup page (first run / repair): one-time download of the video helpers
+	setup_page = VBoxContainer.new()
+	setup_page.add_theme_constant_override("separation", 24)
+	setup_page.size_flags_vertical = SIZE_EXPAND_FILL
+	setup_page.alignment = BoxContainer.ALIGNMENT_CENTER
+	setup_page.visible = false
+	root.add_child(setup_page)
+	var welcome := Label.new()
+	welcome.text = "Welcome to FrameTube"
+	welcome.add_theme_font_size_override("font_size", 44)
+	welcome.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	setup_page.add_child(welcome)
+	var expl := Label.new()
+	expl.text = "Getting ready for the first time: downloading the video helpers (about 300 MB).\nThis only happens once and takes a few minutes."
+	expl.add_theme_color_override("font_color", TEXT_DIM)
+	expl.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	setup_page.add_child(expl)
+	setup_bar = ProgressBar.new()
+	setup_bar.custom_minimum_size = Vector2(0, 36)
+	setup_bar.max_value = 1.0
+	setup_bar.show_percentage = false
+	setup_page.add_child(setup_bar)
+	setup_text = Label.new()
+	setup_text.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	setup_text.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	setup_page.add_child(setup_text)
+	setup_retry = _button("Try again", func(): setup_retry_pressed.emit())
+	setup_retry.theme_type_variation = &"AccentButton"
+	setup_retry.size_flags_horizontal = SIZE_SHRINK_CENTER
+	setup_retry.custom_minimum_size.x = 260
+	setup_retry.visible = false
+	setup_page.add_child(setup_retry)
 
 	# --- Now playing + player controls (always visible)
 	var np := HBoxContainer.new()
@@ -183,18 +253,18 @@ func _ready() -> void:
 	ctl.add_child(_button("+30s", func(): seek_relative.emit(30.0)))
 	ctl.add_child(_spacer())
 	ctl.add_child(_button("Recenter", func(): recenter_pressed.emit()))
-	ctl.add_child(_button("Hide panel", func(): hide_pressed.emit()))
+	ctl.add_child(_button("Hide menu", func(): hide_pressed.emit()))
 
 	var view := HBoxContainer.new()
 	view.add_theme_constant_override("separation", 8)
 	root.add_child(view)
-	proj_btn = _button("View: Flat", func(): projection_pressed.emit())
+	proj_btn = _button("Video type: Normal", func(): projection_pressed.emit())
 	proj_btn.size_flags_horizontal = SIZE_EXPAND_FILL
 	view.add_child(proj_btn)
 	screen_btn = _button("Screen: M", func(): screen_size_pressed.emit())
 	view.add_child(screen_btn)
 	view.add_child(_button("Reset", func(): reset_screen_pressed.emit()))
-	quality_btn = _button("Max 2160p", func(): quality_pressed.emit())
+	quality_btn = _button("Quality: 4K", func(): quality_pressed.emit())
 	view.add_child(quality_btn)
 	swap_btn = CheckButton.new()
 	swap_btn.text = "Swap eyes"
@@ -203,15 +273,53 @@ func _ready() -> void:
 	view.add_child(swap_btn)
 
 	keyboard = _build_keyboard()
+	keyboard.visible = false
 	root.add_child(keyboard)
 	show_page(false)
 
 
 func show_page(settings: bool) -> void:
+	if setup_page.visible:
+		return # setup has to finish first
 	browse_page.visible = not settings
 	settings_page.visible = settings
 	tab_browse.set_pressed_no_signal(not settings)
 	tab_settings.set_pressed_no_signal(settings)
+
+
+## First-run / repair screen. While it's up, the rest of the menu is hidden.
+func show_setup(on: bool) -> void:
+	setup_page.visible = on
+	browse_page.visible = not on
+	settings_page.visible = false
+	for t in [tab_browse, tab_settings]:
+		t.disabled = on
+	setup_retry.visible = false
+	if not on:
+		show_page(false)
+
+
+func set_setup_progress(text: String, fraction: float) -> void:
+	setup_text.text = text
+	setup_text.remove_theme_color_override("font_color")
+	if fraction >= 0.0:
+		setup_bar.value = fraction
+
+
+func set_setup_failed(message: String) -> void:
+	setup_text.text = message
+	setup_text.add_theme_color_override("font_color", Color(1.0, 0.6, 0.55))
+	setup_retry.visible = true
+
+
+func set_about(text: String) -> void:
+	about_label.text = text
+
+
+func _submit(text: String) -> void:
+	if auto_keyboard:
+		keyboard.visible = false
+	submitted.emit(text)
 
 
 # --- Theme --------------------------------------------------------------------------------------
@@ -297,6 +405,8 @@ func apply_accent(c: Color) -> void:
 	filled.content_margin_bottom = 4
 	th.set_stylebox("grabber_area", "HSlider", filled)
 	th.set_stylebox("grabber_area_highlight", "HSlider", filled)
+	th.set_stylebox("background", "ProgressBar", _sb(Color(1, 1, 1, 0.1), 18, Color(0, 0, 0, 0), 0, 0))
+	th.set_stylebox("fill", "ProgressBar", _sb(accent, 18, Color(0, 0, 0, 0), 0, 0))
 
 	th.set_color("font_color", "Label", TEXT)
 	th.set_color("font_color", "CheckButton", TEXT)
@@ -335,11 +445,11 @@ func set_title(text: String) -> void:
 
 
 func set_projection_name(text: String) -> void:
-	proj_btn.text = "View: " + text
+	proj_btn.text = "Video type: " + text
 
 
 func set_quality(height: int) -> void:
-	quality_btn.text = "Max %dp" % height
+	quality_btn.text = "Quality: " + QUALITY_NAMES.get(height, "%dp" % height)
 
 
 func set_decoder(label: String) -> void:
@@ -462,7 +572,7 @@ func _build_keyboard() -> VBoxContainer:
 	sp.add_child(space)
 	sp.add_child(_button("Backspace", _backspace))
 	sp.add_child(_button("Clear", func(): input.text = ""))
-	var enter := _button("Enter", func(): submitted.emit(input.text))
+	var enter := _button("Search", func(): _submit(input.text))
 	enter.theme_type_variation = &"AccentButton"
 	sp.add_child(enter)
 	kb.add_child(sp)

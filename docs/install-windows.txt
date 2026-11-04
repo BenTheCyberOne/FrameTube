@@ -1,0 +1,55 @@
+FrameTube for Windows
+=====================
+Watch YouTube and YouTube VR videos in your Steam Frame, streamed from this PC.
+(The PC does the heavy lifting, so even 8K VR videos play smoothly.)
+
+
+INSTALL (about 2 minutes)
+-------------------------
+1. Right-click the FrameTube zip file and choose "Extract All...", then "Extract".
+
+2. Open the extracted folder and double-click FrameTube.exe.
+
+   If Windows says "Windows protected your PC":
+   click "More info", then "Run anyway". (This appears because FrameTube is a free
+   app that isn't registered with Microsoft. It's safe to run.)
+
+3. The first time it opens, FrameTube downloads its video helpers by itself
+   (about 300 MB). Just wait for the bar to fill up. This only happens once.
+
+
+WATCH IN YOUR STEAM FRAME
+-------------------------
+1. Connect your Steam Frame to this PC (start SteamVR, as you would for any PC VR game).
+2. Open FrameTube. It appears in the headset automatically.
+
+Tip: put FrameTube in your Steam library so you can start it from inside VR:
+   In Steam: Games menu > "Add a Non-Steam Game to My Library..." > Browse...
+   > pick FrameTube.exe > "Add Selected Programs".
+
+
+HOW TO USE IT (in VR)
+---------------------
+  Point and pull the TRIGGER ........ press buttons, pick a video
+  B / Y (or the Menu button) ........ show / hide the menu
+  A / X ............................. pause / play
+  Thumbstick left / right ........... skip back / forward 10 seconds
+  GRIP while pointing at the screen . grab and move the screen
+  GRIP with both hands .............. pull apart to make the screen bigger
+  Thumbstick click .................. re-center everything in front of you
+
+Tap a "Discover" topic to find something to watch without typing.
+Videos remember where you stopped: find them under "Continue watching".
+
+Without a headset FrameTube opens in a normal window: click to use the menu,
+hold the right mouse button and move to look around, Tab shows/hides the menu.
+
+
+IF SOMETHING GOES WRONG
+-----------------------
+- A video won't play: try again (FrameTube updates its YouTube helper by itself),
+  or choose a lower "Quality".
+- Videos never play: open Settings and press "Repair".
+- Age-restricted videos, your subscriptions, Watch later: open Settings > YouTube account.
+  Sign in to YouTube in Firefox on this PC first (works best), then pick Firefox there.
+- The 3D looks "inside out": turn on "Swap eyes".

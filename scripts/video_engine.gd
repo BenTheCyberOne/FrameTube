@@ -13,6 +13,7 @@ extends Node
 signal status(text: String)
 signal finished
 signal decoder_changed(decoder: String)
+signal playback_started # first picture of a newly opened video (not after seeks)
 
 ## Preference-ordered ffmpeg -hwaccel values; "none" means CPU decoding.
 static func default_decoders() -> PackedStringArray:
@@ -77,6 +78,7 @@ var _pending := PackedVector2Array()
 var _start_time := 0.0
 var _clock := 0.0
 var _finished_emitted := false
+var _started_emitted := false
 
 
 func _ready() -> void:
@@ -107,6 +109,7 @@ func open(info: Dictionary, start := 0.0) -> void:
 	_audio_url = info.audio_url
 	_user_agent = str(info.get("user_agent", ""))
 	_reconnects = 0
+	_started_emitted = false
 	stat_uploaded = 0
 	stat_skipped = 0
 	stat_audio_frames = 0
@@ -209,7 +212,7 @@ func _process(delta: float) -> void:
 			decoder_index += 1
 			decoder_changed.emit(decoders[decoder_index])
 			push_warning("Decoder '%s' failed, falling back to '%s': %s" % [failed, decoders[decoder_index], verr])
-			status.emit("GPU decoder '%s' unavailable, trying %s..." % [failed, _decoder_label(decoders[decoder_index])])
+			status.emit("Loading...")
 			_mutex.lock()
 			_video_eof = false
 			_error_text = ""
@@ -221,7 +224,7 @@ func _process(delta: float) -> void:
 			if not _retry_due():
 				return
 			_stream_retries += 1
-			status.emit("Stream refused, retrying (%d/%d)..." % [_stream_retries, MAX_STREAM_RETRIES])
+			status.emit("Loading...")
 			_mutex.lock()
 			_video_eof = false
 			_error_text = ""
@@ -240,12 +243,16 @@ func _process(delta: float) -> void:
 		if dead:
 			buffering = false
 			playing = false
-			status.emit("Playback failed: " + err if err != "" else "Playback failed (ffmpeg produced no frames).")
+			push_warning("Playback failed: " + err)
+			status.emit("Couldn't play this video. Try again, or pick a lower Quality.")
 			return
 		if not ready:
 			return
 		buffering = false
 		status.emit("")
+		if not _started_emitted:
+			_started_emitted = true
+			playback_started.emit()
 
 	_retry_audio()
 	if _gen == null and _audio_got_data:
@@ -401,7 +408,7 @@ func _check_end() -> void:
 	var pos := get_position()
 	if duration > 0.0 and pos < duration - 3.0 and _reconnects < MAX_RECONNECTS:
 		_reconnects += 1
-		status.emit("Stream dropped, reconnecting (%d/%d)..." % [_reconnects, MAX_RECONNECTS])
+		status.emit("Connection hiccup, reconnecting...")
 		_restart(pos)
 		return
 	if audio_done and _pending.is_empty():
@@ -439,12 +446,12 @@ func _restart(t: float) -> void:
 	_audio_start = t
 	_audio_base = t
 	buffering = true
-	status.emit("Buffering...")
+	status.emit("Loading...")
 
 	if not _spawn_video(s):
 		playing = false
 		buffering = false
-		status.emit("Couldn't start ffmpeg. Put it in the bin folder or on PATH.")
+		status.emit("FrameTube's video helpers are missing. Open Settings and press Repair.")
 		return
 	if _audio_url != "":
 		_spawn_audio(s)

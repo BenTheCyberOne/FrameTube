@@ -24,7 +24,7 @@ static func feed(key: String, count := 30) -> Dictionary:
 	var r := list(FEEDS.get(key, key), count)
 	var empty: bool = r.has("error") or r.results.is_empty()
 	if empty and cookie_args().is_empty():
-		r.error = "This needs your YouTube account. Pick a browser with the Account button, or put cookies.txt in the app folder."
+		r.error = "This needs your YouTube account. Open Settings > YouTube account to sign in."
 	return r
 
 
@@ -98,6 +98,33 @@ static func resolve(url: String, max_height: int) -> Dictionary:
 		"vcodec": _str(v, "vcodec"),
 		"user_agent": ua,
 	}
+
+
+## Turns yt-dlp's technical errors into something a non-technical person can act on.
+## "update": true when the cause may be YouTube changing something (worth updating yt-dlp and retrying).
+static func friendly_error(raw: String) -> Dictionary:
+	var t := raw.to_lower()
+	var rules := [
+		["couldn't run yt-dlp", "FrameTube's video helpers are missing. Open Settings and press Repair.", false],
+		["requested format|no video formats|unable to extract|signature|nsig",
+			"Couldn't load this video. YouTube may have changed something.", true],
+		["confirm your age|age-restricted|inappropriate for some users",
+			"This video is age-restricted. Sign in to YouTube (Settings > YouTube account) to watch it.", false],
+		["not a bot|sign in to confirm",
+			"YouTube is asking for a sign-in. Set up your YouTube account in Settings, then try again.", false],
+		["private video", "This video is private.", false],
+		["members-only|join this channel|members only", "This video is for channel members only.", false],
+		["premieres in|will begin in|this live event will", "This video hasn't started yet. Try again later.", false],
+		["video unavailable|not available|has been removed|account associated|terminated|copyright",
+			"This video isn't available.", false],
+		["unable to download webpage|getaddrinfo|name or service|timed out|network is unreachable|connection",
+			"Can't reach YouTube. Check your internet connection and try again.", false],
+		["cookie", "Couldn't read your sign-in from that browser. Close the browser and try again, or pick another one in Settings.", false],
+	]
+	for r in rules:
+		if _matches(r[0], t):
+			return {"message": r[1], "update": r[2]}
+	return {"message": "Couldn't load this video. YouTube may have changed something.", "update": true}
 
 
 ## Blocking. Reads the stream header with `ffmpeg -i` and reports its VR metadata:

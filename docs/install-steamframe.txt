@@ -1,0 +1,50 @@
+FrameTube for Steam Frame
+=========================
+Watch YouTube and YouTube VR videos right on your Steam Frame, no PC needed.
+(For the smoothest 5K/8K VR videos, the Windows version streamed from a PC is better.)
+
+These steps follow SteamOS's Desktop Mode, the same as on a Steam Deck. Menu names on
+the Steam Frame may differ slightly.
+
+
+INSTALL (about 5 minutes)
+-------------------------
+1. Switch the Frame to Desktop Mode
+   (Steam menu > Power > Switch to Desktop).
+
+2. Open the web browser, download the FrameTube-SteamFrame zip file,
+   then open your Downloads folder.
+
+3. Right-click the zip file and choose "Extract" (or "Extract archive here").
+
+4. In the extracted folder, right-click "FrameTube.arm64" and choose "Add to Steam".
+
+5. Switch back to Gaming Mode (the "Return to Gaming Mode" icon on the desktop).
+   FrameTube is now in your library, under "Non-Steam".
+
+6. Start it. The first time, FrameTube downloads its video helpers by itself
+   (about 200 MB). Just wait for the bar to fill up. This only happens once.
+
+
+HOW TO USE IT
+-------------
+  Point and pull the TRIGGER ........ press buttons, pick a video
+  B / Y (or the Menu button) ........ show / hide the menu
+  A / X ............................. pause / play
+  Thumbstick left / right ........... skip back / forward 10 seconds
+  GRIP while pointing at the screen . grab and move the screen
+  GRIP with both hands .............. pull apart to make the screen bigger
+  Thumbstick click .................. re-center everything in front of you
+
+Tap a "Discover" topic to find something to watch without typing.
+Videos remember where you stopped: find them under "Continue watching".
+
+
+IF SOMETHING GOES WRONG
+-----------------------
+- A video stutters: choose a lower "Quality" (4K is the sweet spot on the headset).
+- A video won't play: try again (FrameTube updates its YouTube helper by itself).
+- Videos never play: open Settings and press "Repair".
+- Age-restricted videos, your subscriptions, Watch later: open Settings > YouTube account.
+  Sign in to YouTube in Firefox in Desktop Mode first, then pick Firefox there.
+- The 3D looks "inside out": turn on "Swap eyes".

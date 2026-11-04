@@ -1,12 +1,29 @@
 # FrameTube
 
-A YouTube / YouTube VR player for Steam Frame, built in Godot 4.7 with OpenXR.
+Watch YouTube and YouTube VR videos (360°, 180°, 3D) in your Steam Frame, or on a big virtual screen.
 
-It plays streams through yt-dlp, the same approach as yt-dlp itself, NewPipe, FreeTube and SmartTube, which are
-all open source on GitHub. That goes against YouTube's terms of service (an agreement between each viewer and
-YouTube), so the Steam store is out, but publishing the source code is fine. If you publish it, keep the
-downloaded tools (`bin/`, `bin-linux-arm64/`) out of the repo. If you ship ffmpeg yourself in a release,
-include its GPL licence and a link to its source code.
+## Quick start (no technical knowledge needed)
+
+1. Download the zip for your device from the releases page:
+   - **FrameTube-Windows**: run it on your PC and stream to the Steam Frame. Smoothest, even 8K VR videos.
+   - **FrameTube-SteamFrame**: runs right on the headset, no PC needed.
+2. Unzip it and open FrameTube. The step-by-step guide is in the zip ("How to install.txt"); the same text is in
+   [`docs/install-windows.txt`](docs/install-windows.txt) and [`docs/install-steamframe.txt`](docs/install-steamframe.txt).
+3. The first time, FrameTube downloads what it needs by itself (about 300 MB, once). Then tap a **Discover**
+   topic or search, and pick a video.
+
+Everything else is automatic: it works out what kind of VR video it is, keeps its YouTube helper up to date,
+remembers where you stopped, and tucks the menu away while you watch (B / Y or Menu brings it back).
+
+---
+
+## About the project
+
+Built in Godot 4.7 with OpenXR. It plays streams through yt-dlp, the same approach as yt-dlp itself, NewPipe,
+FreeTube and SmartTube, which are all open source on GitHub. That goes against YouTube's terms of service (an
+agreement between each viewer and YouTube), so the Steam store is out, but publishing the source code is fine.
+Releases don't contain any third-party binaries: the app downloads yt-dlp, ffmpeg and Deno from their official
+GitHub releases on first run.
 
 ## How it works
 
@@ -22,33 +39,40 @@ equirectangular and YouTube's cubemap layout, and uses `VIEW_INDEX` to give each
 frame. Everything is plain GDScript with no GDExtensions, so the same project runs on Windows and on the
 Frame's ARM64 Linux.
 
-## Helper binaries
+## Helper programs (automatic)
 
-Put these in `bin/`. In the editor that's `FrameTube/bin/`; in an export it's a `bin/` folder next to the
-executable. They can also go in `user://bin` or anywhere on PATH. `bin/` holds the Windows builds and
-`bin-linux-arm64/` holds the Frame builds.
+FrameTube needs yt-dlp (finds the video streams), ffmpeg (decodes them) and Deno (which yt-dlp uses for
+YouTube's player code). **The app installs them itself** (`scripts/setup.gd`). On first run (or **Settings >
+Repair**) it downloads the right builds for the platform from their official GitHub releases, checks them against
+the published SHA-256 checksums, extracts just the executable, and puts it in the app's data folder (`user://bin`:
+`%APPDATA%\Godotpp_userdata\FrameTubein` on Windows, `~/.local/share/godot/app_userdata/FrameTube/bin` on
+Linux). yt-dlp updates itself every 3 days in the background, and once more automatically if a video fails in a
+way that suggests YouTube changed something.
 
-| Tool   | Windows (desktop testing) | Steam Frame (Linux ARM64) |
-|--------|---------------------------|---------------------------|
-| yt-dlp | `yt-dlp.exe`              | `yt-dlp_linux_aarch64` → rename to `yt-dlp` |
-| ffmpeg | `ffmpeg.exe` (BtbN build) | BtbN `linuxarm64-gpl` build → `ffmpeg` |
-| deno   | `deno.exe`                | `deno-aarch64-unknown-linux-gnu` → `deno` |
+| Tool   | Windows (x86_64) | Steam Frame (Linux ARM64) | Linux x86_64 |
+|--------|------------------|---------------------------|--------------|
+| yt-dlp | `yt-dlp.exe` | `yt-dlp_linux_aarch64` | `yt-dlp_linux` |
+| ffmpeg | BtbN `win64-gpl` .zip | BtbN `linuxarm64-gpl` .tar.xz | BtbN `linux64-gpl` .tar.xz |
+| deno   | `x86_64-pc-windows-msvc` .zip | `aarch64-unknown-linux-gnu` .zip | `x86_64-unknown-linux-gnu` .zip |
 
-Recent yt-dlp versions need a JavaScript runtime (Deno) to get YouTube's full format list. If `bin/deno`
-exists, FrameTube passes it to yt-dlp automatically. On Linux, run `chmod +x bin/*`. YouTube changes often,
-so run `yt-dlp -U` whenever things stop resolving.
+For development you can still drop copies into `bin/` (editor) or a `bin/` folder next to the executable; those
+win over the managed ones. Both folders are gitignored.
 
-## Running
+## Building releases
+
+```
+python tools/build_release.py C:\path	o\godotconsole.exe
+```
+This exports the Windows, Steam Frame (Linux arm64) and Linux x86_64 presets (Godot 4.7 export templates needed)
+and writes `build/release/FrameTube-<platform>-v<version>.zip`, each with its plain-language install guide. The
+Linux executables are marked runnable inside the zip, so nobody needs a terminal. The version comes from
+`config/version` in `project.godot`.
+
+## Running from the editor
 
 - **Desktop test mode** (no headset / OpenXR runtime): press F5 in Godot. Right-drag to look around, click
   the panel. Keys: `Space` pause, `←/→` seek 10s, `Tab`/`H` show/hide panel, `P` cycle projection, `R` recenter.
-- **Stream from the PC (recommended for 5.7K/8K)**: start SteamVR with the Frame connected for wireless PC VR
-  streaming, then run FrameTube on Windows (F5 in Godot, or a Windows export with `bin/` next to it). It starts
-  in VR automatically, and the PC does the decoding.
-- **Native on the Steam Frame**: export with the "Steam Frame (Linux arm64)" preset (install Godot's export
-  templates first). Copy `build/linux-arm64/` to the Frame, then copy the contents of `bin-linux-arm64/` into a
-  `bin/` folder next to the executable and run `chmod +x bin/*`. Add it as a non-Steam game. The x86_64 preset
-  also works, through the Frame's x86 emulation, but runs slower.
+- **PC VR / streaming to the Frame**: start SteamVR with the Frame connected, then F5. It starts in VR.
 
 ### VR controls
 | Input | Action |
@@ -75,18 +99,28 @@ change its distance. Bias lighting and the cinema's screen light follow the scre
 
 ## Panel
 
-Two pages, **Browse** and **Settings**, with the player controls always visible underneath.
+Two pages, **Browse** and **Settings**, with the player controls always visible underneath. A **Welcome**
+page takes over on first run while the helpers download (progress bar, "Try again" on failure).
 
-- **Search / URL**, plus **History** (resume points), **Subscriptions**, **Watch later** and **Recommended**.
-  The last three need an account.
-- **Settings page**: Environment, Fidget toy, Accent colour, Bias lighting, Bloom, Account, Video decoder.
-- **Account**: cycles none → Firefox → Chrome → Edge → Brave → Chromium. yt-dlp reads your YouTube login
+- **Startup list**: "Continue watching" if you've watched something before, otherwise a Discover topic, so
+  there's always something to tap. In VR the keyboard appears only when you tap the search box.
+- **Search / URL**, the **Discover** topics (VR180 3D, 360 nature, Roller coasters, Space, Underwater,
+  Concerts, Relax), plus **Continue watching** (resume points), **Subscriptions**, **Watch later** and
+  **For you**. The last three need an account.
+- **The menu tucks itself away** 3 s after a video starts (unless you're using it). The first time, a hint says
+  how to bring it back.
+- **Errors in plain words**: age-restricted, private, members-only, unavailable, no internet, sign-in needed.
+  Anything that looks like YouTube changed something triggers an automatic yt-dlp update and one retry.
+- **Settings page**: Room, Fidget toy, Colour theme, Ambient glow, Glow effects, YouTube account; under
+  *Advanced*: Video decoding and Repair (re-downloads the helpers), plus version info.
+- **YouTube account**: cycles Not signed in → Firefox → Chrome → Edge → Brave → Chromium. yt-dlp reads your YouTube login
   cookies from that browser, so sign in to YouTube there first. Firefox is the reliable choice: Chrome and
   Edge on Windows encrypt their cookies in a way yt-dlp often can't read. Alternatively, export a `cookies.txt`
   (Netscape format) with a browser extension and put it next to the app or in `user://`. It overrides the
   browser setting, and the button then shows "cookies.txt". Signing in also unlocks age-restricted and
   members-only videos.
-- **View** (projection), **Screen** size (S/M/L/XL, flat videos only), **Max** quality, **decoder**, **Swap eyes**.
+- Player row: **Video type** (auto-detected; cycle it if a video looks wrong), **Screen** size + **Reset**,
+  **Quality** (HD / 2K / 4K / 5K / 8K maximum), **Swap eyes**.
 
 ## Environments, lighting and the toy
 
