@@ -61,6 +61,9 @@ var setup_text: Label
 var setup_bar: ProgressBar
 var setup_retry: Button
 var about_label: Label
+var settings_list: VBoxContainer
+var volume_slider: HSlider
+signal volume_changed(v: float) # 0..1
 var tab_browse: Button
 var tab_settings: Button
 
@@ -163,24 +166,40 @@ func _ready() -> void:
 
 	# --- Settings page
 	settings_page = VBoxContainer.new()
-	settings_page.add_theme_constant_override("separation", 20)
+	settings_page.add_theme_constant_override("separation", 8)
 	settings_page.size_flags_vertical = SIZE_EXPAND_FILL
 	settings_page.visible = false
 	root.add_child(settings_page)
+	var settings_scroll := ScrollContainer.new() # scrolls with the thumbstick / mouse wheel
+	settings_scroll.size_flags_vertical = SIZE_EXPAND_FILL
+	settings_scroll.horizontal_scroll_mode = ScrollContainer.SCROLL_MODE_DISABLED
+	settings_page.add_child(settings_scroll)
+	settings_list = VBoxContainer.new()
+	settings_list.size_flags_horizontal = SIZE_EXPAND_FILL
+	settings_list.add_theme_constant_override("separation", 16)
+	settings_scroll.add_child(settings_list)
+
+	_section("Watching")
+	_setting_row("resume", "Resume videos", "Start where you stopped last time")
+	_setting_row("end_action", "When a video ends", "Stop, play it again, or play the next video in the list")
+	_setting_row("autohide", "Hide the menu while watching", "Tucks the menu away a few seconds after a video starts")
+	_setting_row("menu_size", "Menu size", "Bigger menu and text, easier to read")
+	_section("Safety & account")
+	_setting_row("family", "Family-friendly filter",
+		"Hides videos with adult or gory words in them, and blocks 18+ videos")
+	_setting_row("account", "YouTube account",
+		"Sign in to YouTube in this browser on this computer first. Unlocks subscriptions & age-limited videos.")
+	_setting_row("clear_history", "Watch history", "Remove everything from \"Continue watching\"")
+	_section("Room & look")
 	_setting_row("environment", "Room", "What's around you when watching normal videos")
 	_setting_row("toy", "Fidget toy", "Grab it with the grip button, throw it, or swipe it to spin")
+	_setting_row("haptics", "Vibration", "Controllers buzz when you touch the toy")
 	_setting_row("accent", "Colour theme", "Colour of the menu, lights and toy")
 	_setting_row("bias", "Ambient glow", "The video's colours softly light up the room")
 	_setting_row("bloom", "Glow effects", "Turn off if things feel slow")
-	_setting_row("account", "YouTube account",
-		"Sign in to YouTube in this browser on this computer first. Unlocks subscriptions & age-limited videos.")
-	var adv := Label.new()
-	adv.text = "Advanced"
-	adv.set_meta("accent_text", true)
-	settings_page.add_child(adv)
+	_section("Advanced")
 	_setting_row("decoder", "Video decoding", "GPU is faster; it switches automatically if not supported")
 	_setting_row("repair", "Repair", "Re-download FrameTube's video helpers if videos won't play")
-	settings_page.add_child(_spacer(true))
 	about_label = Label.new()
 	about_label.add_theme_font_size_override("font_size", 20)
 	about_label.add_theme_color_override("font_color", TEXT_DIM)
@@ -267,6 +286,21 @@ func _ready() -> void:
 	ctl.add_child(play_btn)
 	ctl.add_child(_button("+10s", func(): seek_relative.emit(10.0)))
 	ctl.add_child(_button("+30s", func(): seek_relative.emit(30.0)))
+	ctl.add_child(_spacer())
+	var vol_label := Label.new()
+	vol_label.text = "Volume"
+	vol_label.add_theme_color_override("font_color", TEXT_DIM)
+	ctl.add_child(vol_label)
+	volume_slider = HSlider.new()
+	volume_slider.min_value = 0.0
+	volume_slider.max_value = 1.0
+	volume_slider.step = 0.01
+	volume_slider.value = 1.0
+	volume_slider.custom_minimum_size = Vector2(220, 44)
+	volume_slider.size_flags_vertical = SIZE_SHRINK_CENTER
+	volume_slider.focus_mode = FOCUS_NONE
+	volume_slider.value_changed.connect(func(v: float): volume_changed.emit(v))
+	ctl.add_child(volume_slider)
 	ctl.add_child(_spacer())
 	ctl.add_child(_button("Recenter", func(): recenter_pressed.emit()))
 	ctl.add_child(_button("Hide menu", func(): hide_pressed.emit()))
@@ -688,9 +722,27 @@ func _setting_row(key: String, title: String, hint: String) -> void:
 	row.add_child(labels)
 	var b := _button("-", _on_setting.bind(key))
 	b.custom_minimum_size.x = 300
+	b.size_flags_vertical = SIZE_SHRINK_CENTER
 	row.add_child(b)
 	_setting_btns[key] = b
-	settings_page.add_child(row)
+	settings_list.add_child(row)
+
+
+func _section(title: String) -> void:
+	var l := Label.new()
+	l.text = title
+	l.add_theme_font_size_override("font_size", 24)
+	l.set_meta("accent_text", true)
+	l.add_theme_color_override("font_color", accent)
+	if settings_list.get_child_count() > 0:
+		settings_list.add_child(_gap(10))
+	settings_list.add_child(l)
+
+
+func _gap(h: int) -> Control:
+	var c := Control.new()
+	c.custom_minimum_size.y = h
+	return c
 
 
 func _on_setting(key: String) -> void:

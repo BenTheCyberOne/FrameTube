@@ -15,8 +15,32 @@ const FEEDS := {
 }
 
 
-static func search(query: String, count := 15) -> Dictionary:
-	return list("ytsearch%d:%s" % [count, query], count)
+## Family-friendly filter: hides results whose title, description or channel match these (whole words /
+## phrases), refuses 18+ videos, and asks YouTube to leave the worst terms out of searches.
+static var family_filter := true
+const FAMILY_BLOCK := [
+	"sexy", "sex", "sexual", "lingerie", "bikini", "underwear", "nsfw", "18\\+", "onlyfans", "erotic", "erotica",
+	"nude", "nudity", "naked", "topless", "twerk", "twerking", "booty", "boudoir", "seductive", "sensual",
+	"stripper", "striptease", "fetish", "hot girls?", "girlfriend experience", "asmr girlfriend", "try[ -]?on",
+	"tries on", "model olena", "pole dance", "lap dance", "hotness", "hotties?", "babes?", "busty", "cleavage",
+	"thicc", "swimsuits?", "spicy", "body ?paint(ing)?", "vr ?girls?", "dangerous beauty", "flexibility",
+	"gore", "gory", "graphic violence", "jumpscare",
+	"jump scare", "horror", "murder", "creepypasta",
+	# (not "killer", "blood", "strip": killer whales, blood moons and the Las Vegas Strip are fine)
+]
+const FAMILY_QUERY_EXCLUDE := " -sexy -lingerie -bikini -twerk -nsfw -horror"
+
+
+static func family_ok(item: Dictionary) -> bool:
+	if not family_filter:
+		return true
+	var text := ("%s %s %s" % [item.get("title", ""), item.get("description", ""), item.get("channel", "")]).to_lower()
+	return not _matches("\\b(" + "|".join(FAMILY_BLOCK) + ")\\b", text)
+
+
+static func search(query: String, count := 20) -> Dictionary:
+	var q := query + (FAMILY_QUERY_EXCLUDE if family_filter else "")
+	return list("ytsearch%d:%s" % [count, q], count)
 
 
 ## A feed key from FEEDS (needs an account), or any yt-dlp playlist/search target.
@@ -35,6 +59,7 @@ static func list(target: String, count := 30) -> Dictionary:
 	if data is String:
 		return {"error": data}
 	var results := []
+	var hidden := 0
 	for e in data.get("entries", []):
 		if typeof(e) != TYPE_DICTIONARY or _str(e, "id") == "":
 			continue
@@ -45,7 +70,7 @@ static func list(target: String, count := 30) -> Dictionary:
 		if channel == "":
 			channel = _str(e, "uploader")
 		var verified = e.get("channel_is_verified")
-		results.append({
+		var item := {
 			"id": _str(e, "id"),
 			"title": _str(e, "title", "(untitled)"),
 			"duration": _num(e, "duration"),
@@ -54,8 +79,12 @@ static func list(target: String, count := 30) -> Dictionary:
 			"description": _str(e, "description").replace("\n", " ").strip_edges(),
 			"live": _str(e, "live_status") == "is_live",
 			"verified": verified is bool and verified,
-		})
-	return {"results": results}
+		}
+		if family_ok(item):
+			results.append(item)
+		else:
+			hidden += 1
+	return {"results": results, "hidden": hidden}
 
 
 ## Quick visual tags from the title (search results don't carry projection or resolution metadata).
@@ -107,6 +136,10 @@ static func resolve(url: String, max_height: int) -> Dictionary:
 	var h := int(_num(v, "height"))
 	if w <= 0 or h <= 0:
 		return {"error": "yt-dlp didn't report the video size."}
+	if family_filter and int(_num(data, "age_limit")) >= 18:
+		return {"error": "FAMILY: This video is for adults only, so the family-friendly filter blocked it."}
+	if family_filter and not family_ok({"title": _str(data, "title"), "channel": _str(data, "channel")}):
+		return {"error": "FAMILY: The family-friendly filter blocked this video."}
 
 	var headers = v.get("http_headers", {})
 	var live = data.get("is_live")
@@ -133,6 +166,8 @@ static func resolve(url: String, max_height: int) -> Dictionary:
 ## Turns yt-dlp's technical errors into something a non-technical person can act on.
 ## "update": true when the cause may be YouTube changing something (worth updating yt-dlp and retrying).
 static func friendly_error(raw: String) -> Dictionary:
+	if raw.begins_with("FAMILY: "):
+		return {"message": raw.trim_prefix("FAMILY: ") + " (You can turn it off in Settings.)", "update": false}
 	var t := raw.to_lower()
 	var rules := [
 		["couldn't run yt-dlp", "FrameTube's video helpers are missing. Open Settings and press Repair.", false],
@@ -141,7 +176,7 @@ static func friendly_error(raw: String) -> Dictionary:
 		["confirm your age|age-restricted|inappropriate for some users",
 			"This video is age-restricted. Sign in to YouTube (Settings > YouTube account) to watch it.", false],
 		["not a bot|sign in to confirm",
-			"YouTube is asking for a sign-in. Set up your YouTube account in Settings, then try again.", false],
+			"YouTube wants a sign-in right now (this happens now and then). Try again in a few minutes, or set up your YouTube account in Settings to avoid it.", false],
 		["private video", "This video is private.", false],
 		["members-only|join this channel|members only", "This video is for channel members only.", false],
 		["premieres in|will begin in|this live event will", "This video hasn't started yet. Try again later.", false],

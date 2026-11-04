@@ -111,8 +111,22 @@ page takes over on first run while the helpers download (progress bar, "Try agai
   how to bring it back.
 - **Errors in plain words**: age-restricted, private, members-only, unavailable, no internet, sign-in needed.
   Anything that looks like YouTube changed something triggers an automatic yt-dlp update and one retry.
-- **Settings page**: Room, Fidget toy, Colour theme, Ambient glow, Glow effects, YouTube account; under
-  *Advanced*: Video decoding and Repair (re-downloads the helpers), plus version info.
+- **Results** are two-column cards: thumbnail (cached in `user://thumbs`) with duration / LIVE chip,
+  VR180 / 360° / 3D / 4K / 5.7K / 8K+ badges (from the title) and a resume bar, then title, channel ✓, views and a
+  description snippet. (Search results don't include upload dates, so there are none.)
+- **Settings page** (scrolls), in sections:
+  - *Watching*: Resume videos, When a video ends (Stop / Replay / Play next in the list), Hide the menu while
+    watching, Menu size (Normal / Large / Extra large).
+  - *Safety & account*: **Family-friendly filter** (on by default), YouTube account, Clear watch history (press
+    twice).
+  - *Room & look*: Room, Fidget toy, Vibration, Colour theme, Ambient glow, Glow effects.
+  - *Advanced*: Video decoding, Repair (re-downloads the helpers), version info.
+- **Volume** slider in the player controls (desktop: ↑/↓), remembered between sessions.
+- **Family-friendly filter**: hides results whose title, description or channel contain adult, gore or horror
+  words (whole-word list in `youtube.gd`, `FAMILY_BLOCK`), asks YouTube to leave the worst terms out of every
+  search (`-sexy -lingerie …`), and refuses videos YouTube marks 18+ even if a link is pasted. The status line
+  says how many results it hid. It's a keyword filter, not a guarantee: YouTube's own Restricted Mode is tied to
+  an account and isn't available to the app.
 - **YouTube account**: cycles Not signed in → Firefox → Chrome → Edge → Brave → Chromium. yt-dlp reads your YouTube login
   cookies from that browser, so sign in to YouTube there first. Firefox is the reliable choice: Chrome and
   Edge on Windows encrypt their cookies in a way yt-dlp often can't read. Alternatively, export a `cookies.txt`

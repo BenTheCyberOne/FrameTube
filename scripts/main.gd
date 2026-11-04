@@ -8,6 +8,8 @@ const PANEL_PX := Vector2i(1500, 1050)
 const PANEL_M := Vector2(1.5, 1.05)
 const ACCOUNTS := ["", "firefox", "chrome", "edge", "brave", "chromium"] # yt-dlp --cookies-from-browser names
 const SAVE_EVERY := 5.0
+const MENU_SIZES := [["Normal", 1.0], ["Large", 1.2], ["Extra large", 1.4]]
+const END_ACTIONS := ["Stop", "Replay", "Play next"]
 const ACCENTS := [["Sky", Color(0.32, 0.66, 1.0)], ["Violet", Color(0.64, 0.5, 1.0)], ["Rose", Color(1.0, 0.4, 0.66)],
 	["Mint", Color(0.22, 0.87, 0.73)], ["Amber", Color(1.0, 0.71, 0.3)], ["Lime", Color(0.63, 0.9, 0.38)]]
 
@@ -44,6 +46,12 @@ var _save_timer := 0.0
 var current_url := ""
 var _last_info := {}
 var setup: ToolSetup
+var resume_on := true
+var end_action := 0
+var autohide_on := true
+var menu_size_idx := 0
+var haptics_on := true
+var _clear_confirm_until := 0.0
 var _updated_after_error := false
 var _last_search := ""
 var _autotest_running := false
@@ -143,6 +151,23 @@ func _run_autotest() -> void:
 	_refresh_setting_labels()
 	if opts.has("settings"):
 		ui.show_page(true)
+	if opts.has("family"):
+		YouTube.family_filter = opts.family == "1"
+	if opts.has("end"):
+		end_action = int(opts.end)
+	_refresh_setting_labels()
+	if opts.has("next-logic"): # "Play next" without touching YouTube: fake list, current = item 0
+		search_results = [{"id": "AAAAAAAAAAA", "title": "First"}, {"id": "BBBBBBBBBBB", "title": "Second"}]
+		current_url = "https://www.youtube.com/watch?v=AAAAAAAAAAA"
+		end_action = 2
+		var before := _request
+		_on_finished()
+		print("[next] status='%s' new_request=%s" % [ui.status_label.text, _request > before])
+		current_url = "https://www.youtube.com/watch?v=BBBBBBBBBBB"
+		_on_finished()
+		print("[next] at end of list: status='%s'" % ui.status_label.text)
+		get_tree().quit()
+		return
 	if opts.has("screen-test"):
 		_screen_test.call_deferred(shots)
 	if opts.has("poke-at"): # flick the toy at this second to see sparks/spin
@@ -182,6 +207,12 @@ func _run_autotest() -> void:
 				store.touch(url, r.title, r.duration, r.channel, r.get("views", 0))
 				store.set_position(url, r.duration * (0.25 + 0.25 * i))
 			_on_feed("history")
+		if sec == int(opts.get("choose-at", "-1")): # tap the first result
+			print("[test] choosing result 0: ", search_results[0].title if not search_results.is_empty() else "(none)")
+			_on_result_chosen(0)
+		if sec == int(opts.get("seek-end-at", "-1")): # jump to 3 s before the end
+			print("[test] seeking near the end of ", engine.duration)
+			engine.seek(engine.duration - 3.0)
 		if sec == int(opts.get("replay-at", "-1")):
 			print("[test] re-opening the same video (should resume)")
 			_play(opts.play)
@@ -198,7 +229,7 @@ func _run_autotest() -> void:
 			print("[test] view yaw=%s pitch=%s -> %s" % [yp[0], yp[1], path])
 			i += 1
 	print("[test] done. projection=", PROJECTIONS[projection], " title=", ui.title_label.text,
-		" probe=", _last_info.get("probe", {}))
+		" probe=", _last_info.get("probe", {}), " status=", ui.status_label.text)
 	get_tree().quit()
 
 
@@ -369,6 +400,7 @@ func _build_panel() -> void:
 	ui.recenter_pressed.connect(_recenter)
 	ui.hide_pressed.connect(_toggle_panel)
 	ui.setting_pressed.connect(_on_setting)
+	ui.volume_changed.connect(_on_volume)
 	ui.reset_screen_pressed.connect(_reset_screen)
 
 
@@ -466,7 +498,8 @@ func _update_hand_pokes(delta: float) -> void:
 func _on_toy_touched(strength: float) -> void:
 	var c := _toy_hand if _toy_hand else (toy.grabbed_by as XRController3D)
 	if c:
-		c.trigger_haptic_pulse("haptic", 0.0, clampf(strength, 0.15, 1.0), 0.06, 0.0)
+		if haptics_on:
+			c.trigger_haptic_pulse("haptic", 0.0, clampf(strength, 0.15, 1.0), 0.06, 0.0)
 
 
 func _on_xr_button(action: String, c: XRController3D, pressed: bool) -> void:
@@ -514,6 +547,8 @@ func _input(event: InputEvent) -> void:
 				KEY_TAB, KEY_H: _toggle_panel()
 				KEY_R: _recenter()
 				KEY_P: _next_projection()
+				KEY_UP: _set_volume(ui.volume_slider.value + 0.1)
+				KEY_DOWN: _set_volume(ui.volume_slider.value - 0.1)
 		return
 	if xr_mode:
 		return
@@ -654,8 +689,10 @@ func _recenter() -> void:
 func _place_panel() -> void:
 	var fwd := _flat_forward()
 	var eye := camera.global_position
-	var pos := eye + fwd * 1.15
-	pos.y = eye.y - 0.35
+	var s: float = MENU_SIZES[menu_size_idx][1] # a bigger menu sits a little further away, a little lower
+	panel.scale = Vector3.ONE * s
+	var pos := eye + fwd * (1.15 + 0.5 * (s - 1.0))
+	pos.y = eye.y - 0.35 * s
 	var basis := Basis.looking_at(fwd, Vector3.UP) * Basis(Vector3.RIGHT, deg_to_rad(-20.0))
 	panel.global_transform = Transform3D(basis, pos)
 
@@ -729,8 +766,31 @@ func _load_settings() -> void:
 	envs.bloom = bool(store.get_setting("bloom", true))
 	envs.set_style(clampi(int(store.get_setting("environment", 0)), 0, Environments.STYLES.size() - 1))
 	toy.set_shape(clampi(int(store.get_setting("toy", 0)), 0, FidgetToy.SHAPES.size() - 1))
+	resume_on = bool(store.get_setting("resume", true))
+	end_action = clampi(int(store.get_setting("end_action", 0)), 0, END_ACTIONS.size() - 1)
+	autohide_on = bool(store.get_setting("autohide", true))
+	menu_size_idx = clampi(int(store.get_setting("menu_size", 0)), 0, MENU_SIZES.size() - 1)
+	haptics_on = bool(store.get_setting("haptics", true))
+	YouTube.family_filter = bool(store.get_setting("family", true)) # on by default
+	var vol := clampf(float(store.get_setting("volume", 1.0)), 0.0, 1.0)
+	ui.volume_slider.set_value_no_signal(vol)
+	_apply_volume(vol)
 	_apply_accent()
 	_refresh_setting_labels()
+
+
+func _on_volume(v: float) -> void:
+	_apply_volume(v)
+	store.set_setting("volume", v)
+
+
+func _set_volume(v: float) -> void:
+	ui.volume_slider.value = clampf(v, 0.0, 1.0) # emits value_changed -> _on_volume
+
+
+func _apply_volume(v: float) -> void:
+	AudioServer.set_bus_mute(0, v <= 0.001)
+	AudioServer.set_bus_volume_db(0, linear_to_db(maxf(v, 0.001)))
 
 
 func _on_setting(key: String) -> void:
@@ -753,6 +813,40 @@ func _on_setting(key: String) -> void:
 			store.set_setting("bloom", envs.bloom)
 		"repair":
 			_repair()
+		"resume":
+			resume_on = not resume_on
+			store.set_setting("resume", resume_on)
+		"end_action":
+			end_action = (end_action + 1) % END_ACTIONS.size()
+			store.set_setting("end_action", end_action)
+		"autohide":
+			autohide_on = not autohide_on
+			store.set_setting("autohide", autohide_on)
+		"menu_size":
+			menu_size_idx = (menu_size_idx + 1) % MENU_SIZES.size()
+			store.set_setting("menu_size", menu_size_idx)
+			_place_panel()
+		"family":
+			YouTube.family_filter = not YouTube.family_filter
+			store.set_setting("family", YouTube.family_filter)
+			ui.set_status("Family-friendly filter is " + ("on. New searches leave out adult and gory videos." if YouTube.family_filter else "off."))
+		"haptics":
+			haptics_on = not haptics_on
+			store.set_setting("haptics", haptics_on)
+		"clear_history":
+			var now := Time.get_ticks_msec() / 1000.0
+			if store.history.is_empty():
+				pass
+			elif now < _clear_confirm_until: # second press within 4 s: do it
+				_clear_confirm_until = 0.0
+				store.history.clear()
+				store.save_history()
+				ui.set_status("Watch history cleared.")
+			else:
+				_clear_confirm_until = now + 4.0
+				ui.set_setting("clear_history", "Press again to clear")
+				get_tree().create_timer(4.1).timeout.connect(_refresh_setting_labels)
+				return
 	_refresh_setting_labels()
 
 
@@ -771,6 +865,14 @@ func _refresh_setting_labels() -> void:
 	ui.set_setting("accent", ACCENTS[accent_idx][0])
 	ui.set_setting("bias", "On" if envs.bias_light else "Off")
 	ui.set_setting("bloom", "On" if envs.bloom else "Off")
+	ui.set_setting("resume", "On" if resume_on else "Off")
+	ui.set_setting("end_action", END_ACTIONS[end_action])
+	ui.set_setting("autohide", "On" if autohide_on else "Off")
+	ui.set_setting("menu_size", MENU_SIZES[menu_size_idx][0])
+	ui.set_setting("family", "On" if YouTube.family_filter else "Off")
+	ui.set_setting("haptics", "On" if haptics_on else "Off")
+	if Time.get_ticks_msec() / 1000.0 > _clear_confirm_until:
+		ui.set_setting("clear_history", "Clear (%d)" % store.history.size() if not store.history.is_empty() else "Empty")
 
 
 func _cycle_decoder() -> void:
@@ -831,7 +933,24 @@ func _save_position() -> void:
 
 
 func _on_finished() -> void:
-	ui.set_status("Finished.")
+	match END_ACTIONS[end_action]:
+		"Replay":
+			ui.set_status("Playing again.")
+			engine.seek(0.0)
+			return
+		"Play next":
+			var id := Store.video_id(current_url)
+			for i in search_results.size():
+				if search_results[i].id == id and i + 1 < search_results.size():
+					var nxt: Dictionary = search_results[i + 1]
+					if current_url != "":
+						store.set_position(current_url, 0.0)
+					ui.set_status("Up next: " + str(nxt.title))
+					_play(nxt.get("url", "https://www.youtube.com/watch?v=" + nxt.id), 0.0)
+					return
+			ui.set_status("That was the last video in the list.")
+		_:
+			ui.set_status("Finished.")
 	if current_url != "":
 		store.set_position(current_url, 0.0) # watched to the end: next time start over
 		store.save_history()
@@ -937,7 +1056,7 @@ func _on_playback_started() -> void:
 		return
 	var started_at := Time.get_ticks_msec() / 1000.0
 	await get_tree().create_timer(3.0).timeout
-	if not panel.visible or _last_panel_use > started_at or ui.keyboard.visible:
+	if not autohide_on or not panel.visible or _last_panel_use > started_at or ui.keyboard.visible:
 		return
 	_toggle_panel()
 	if not bool(store.get_setting("menu_hint_shown", false)):
@@ -997,7 +1116,11 @@ func _on_search_done(r: Dictionary, id: int, done_message := "") -> void:
 	if search_results.is_empty():
 		ui.set_status("Nothing found. Try other words.")
 	else:
-		ui.set_status(done_message if done_message != "" else "Tap a video to play it.")
+		var msg := done_message if done_message != "" else "Tap a video to play it."
+		var hidden := int(r.get("hidden", 0))
+		if hidden > 0:
+			msg += "  (Family filter hid %d video%s.)" % [hidden, "" if hidden == 1 else "s"]
+		ui.set_status(msg)
 
 
 func _on_result_chosen(i: int) -> void:
@@ -1013,7 +1136,7 @@ func _play(url: String, start := -1.0, keep_projection := false) -> void:
 	_save_position() # remember where we were in the previous video
 	_request += 1
 	if start < 0.0:
-		start = store.resume_position(url)
+		start = store.resume_position(url) if resume_on else 0.0
 	ui.set_status("Loading video..." if start <= 0.0 else "Loading, resuming at %s..." % UIPanel._fmt(start))
 	var h: int = QUALITIES[quality_idx]
 	_run_async(func(): return YouTube.resolve(url, h), _on_resolved.bind(_request, url, start, keep_projection))
@@ -1040,6 +1163,7 @@ func _on_resolved(r: Dictionary, id: int, url: String, start: float, keep_projec
 	else:
 		_set_projection(YouTube.guess_projection(r))
 	store.touch(url, r.title, r.duration, r.get("channel", ""), int(r.get("views", 0)))
+	_refresh_setting_labels() # history count
 	ui.set_title("%s   (%dx%d %s)" % [r.title, r.width, r.height, r.vcodec.get_slice(".", 0)])
 
 
