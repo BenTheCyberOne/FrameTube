@@ -10,6 +10,8 @@ const ACCOUNTS := ["", "firefox", "chrome", "edge", "brave", "chromium"] # yt-dl
 const SAVE_EVERY := 5.0
 const MENU_SIZES := [["Normal", 1.0], ["Large", 1.2], ["Extra large", 1.4]]
 const END_ACTIONS := ["Stop", "Replay", "Play next"]
+const SPEEDS := [1.0, 1.25, 1.5, 2.0, 0.5, 0.75]
+const SUB_SIZES := [["Small", 0.8], ["Medium", 1.0], ["Large", 1.3]]
 const ACCENTS := [["Sky", Color(0.32, 0.66, 1.0)], ["Violet", Color(0.64, 0.5, 1.0)], ["Rose", Color(1.0, 0.4, 0.66)],
 	["Mint", Color(0.22, 0.87, 0.73)], ["Amber", Color(1.0, 0.71, 0.3)], ["Lime", Color(0.63, 0.9, 0.38)]]
 
@@ -52,6 +54,16 @@ var autohide_on := true
 var menu_size_idx := 0
 var haptics_on := true
 var _clear_confirm_until := 0.0
+var subs: Subtitles
+var subs_tracks: Array = []
+var subs_idx := -1 # -1 = off
+var subs_pref := "" # language code to switch on automatically ("" = off)
+var subs_size_idx := 1
+var _sub_screen: Label3D # under the flat screen's picture
+var _sub_head: Label3D # head-locked, for 360/180
+var speed_idx := 0
+var _pin_fails := 0
+var _pin_lock_until := 0.0
 var _updated_after_error := false
 var _last_search := ""
 var _autotest_running := false
@@ -83,6 +95,7 @@ func _ready() -> void:
 	toy = FidgetToy.new()
 	add_child(toy)
 	toy.touched.connect(_on_toy_touched)
+	_build_subtitles()
 
 	engine = VideoEngine.new()
 	add_child(engine)
@@ -153,6 +166,8 @@ func _run_autotest() -> void:
 		ui.show_page(true)
 	if opts.has("family"):
 		YouTube.family_filter = opts.family == "1"
+	if opts.has("subs-lang"):
+		subs_pref = str(opts["subs-lang"])
 	if opts.has("end"):
 		end_action = int(opts.end)
 	_refresh_setting_labels()
@@ -177,10 +192,30 @@ func _run_autotest() -> void:
 		# Local file/image instead of YouTube: --play=x --file=<path> --size=WxH [--projection=N]
 		var wh := str(opts.get("size", "1920x1080")).split("x")
 		var info := {"title": opts.file.get_file(), "width": int(wh[0]), "height": int(wh[1]), "fps": 30.0,
-			"duration": 0.0, "video_url": opts.file, "audio_url": "", "vcodec": "file", "probe": {}}
+			"duration": float(opts.get("dur", "0")), "video_url": opts.file,
+			"audio_url": opts.file if opts.has("file-audio") else "", "vcodec": "file", "probe": {}}
+		if opts.has("speed"):
+			engine.speed = float(opts.speed)
+		if opts.has("curve"):
+			rig.set_curve(int(opts.curve))
 		_on_resolved(info, _request, opts.file, 0.0, opts.has("projection"))
 		if opts.has("projection"):
 			_set_projection(int(opts.projection))
+		if opts.has("subs-file"): # inject a local json3 track
+			subs_tracks = [{"code": "en", "name": "English", "auto": false, "url": ""}]
+			subs_idx = 0
+			subs.cues = Subtitles.parse_json3(FileAccess.get_file_as_string(opts["subs-file"]))
+			_refresh_subs_label()
+			print("[subs] parsed %d cues; at 1s='%s' at 5s='%s' at 8s='%s' at 10s='%s'" % [subs.cues.size(),
+				subs.text_at(1.0), subs.text_at(5.0).replace("\n", " | "), subs.text_at(8.0), subs.text_at(10.0)])
+		if opts.has("hit-test"): # laser at the screen centre and near its right edge
+			await get_tree().create_timer(0.8).timeout
+			var o := camera.global_position
+			for target in [screen.global_position, screen.global_transform * Vector3(rig.size.x * 0.45, 0, 0)]:
+				print("[hit] curve=%s r=%.2f target=%s -> %s" % [ScreenRig.CURVES[rig.curve_mode], rig._radius,
+					target.snapped(Vector3.ONE * 0.01), rig.hit(o, (target - o).normalized())])
+	elif opts.has("pin-test"):
+		_pin_test()
 	elif opts.has("welcome") and opts.play == "x":
 		pass # startup shows its own list
 	elif opts.has("search"):
@@ -228,9 +263,46 @@ func _run_autotest() -> void:
 			get_viewport().get_texture().get_image().save_png(path)
 			print("[test] view yaw=%s pitch=%s -> %s" % [yp[0], yp[1], path])
 			i += 1
+	if opts.has("subs-lang"):
+		var pos := engine.get_position()
+		print("[subs] tracks=%s chosen=%s cues=%d now(%.1fs)='%s'" % [subs_tracks.map(func(t): return t.name), subs_idx,
+			subs.cues.size(), pos, subs.text_at(pos).replace("\n", " | ")])
 	print("[test] done. projection=", PROJECTIONS[projection], " title=", ui.title_label.text,
 		" probe=", _last_info.get("probe", {}), " status=", ui.status_label.text)
 	get_tree().quit()
+
+
+## Scripted parental-lock check: set PIN 1234 via the keypad, then try to turn the filter off with a wrong
+## and then the right PIN. Prints each step. (Presses the real keypad buttons' handler.)
+func _pin_test() -> void:
+	var press := func(digits: String) -> void:
+		for d in digits:
+			await get_tree().process_frame
+			ui._pin_key(d)
+	_toggle_pin_lock() # asks twice
+	await get_tree().process_frame
+	print("[pin] prompt: ", ui.pin_prompt.text)
+	await press.call("1234")
+	await get_tree().process_frame
+	print("[pin] prompt: ", ui.pin_prompt.text)
+	await press.call("1234")
+	await get_tree().process_frame
+	print("[pin] lock set=%s filter=%s status='%s'" % [_pin_set(), YouTube.family_filter, ui.status_label.text])
+	_on_setting("family") # wants to turn the filter OFF -> PIN
+	await get_tree().process_frame
+	print("[pin] keypad shown=%s prompt='%s'" % [ui.pin_page.visible, ui.pin_prompt.text])
+	viewport.get_texture().get_image().save_png(OS.get_user_data_dir().path_join("pin_keypad.png"))
+	await press.call("0000")
+	await get_tree().process_frame
+	print("[pin] wrong PIN -> filter=%s status='%s'" % [YouTube.family_filter, ui.status_label.text])
+	_on_setting("family")
+	await get_tree().process_frame
+	await press.call("1234")
+	await get_tree().process_frame
+	print("[pin] right PIN -> filter=%s" % YouTube.family_filter)
+	_on_setting("family") # turning it back ON needs no PIN
+	await get_tree().process_frame
+	print("[pin] turned on again without PIN -> filter=%s keypad=%s" % [YouTube.family_filter, ui.pin_page.visible])
 
 
 ## Scripted check of ScreenRig: one-hand drag, two-hand scale, push, resize, reset. Prints numbers + shots.
@@ -360,6 +432,56 @@ func _build_video_surfaces() -> void:
 	add_child(sphere)
 
 
+func _build_subtitles() -> void:
+	subs = Subtitles.new()
+	add_child(subs)
+	subs.loaded.connect(_on_subs_loaded)
+	for i in 2:
+		var l := Label3D.new()
+		l.font_size = 48
+		l.outline_size = 14
+		l.outline_modulate = Color(0, 0, 0, 0.9)
+		l.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+		l.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+		l.vertical_alignment = VERTICAL_ALIGNMENT_BOTTOM
+		l.visible = false
+		l.render_priority = 2
+		if i == 0:
+			_sub_screen = l
+			screen.add_child(l)
+		else:
+			_sub_head = l
+			l.no_depth_test = true # always readable over 360 video
+			l.position = Vector3(0, -0.3, -1.4)
+			camera.add_child(l)
+
+
+## Each frame: put the current subtitle line under the picture (flat) or low in your view (360/180).
+func _update_subtitles() -> void:
+	var text := subs.text_at(engine.get_position()) if subs_idx >= 0 and engine.playing else ""
+	var k: float = SUB_SIZES[subs_size_idx][1]
+	var flat := screen.visible
+	_sub_screen.visible = flat and text != ""
+	_sub_head.visible = not flat and text != "" and current_url != ""
+	if _sub_screen.visible:
+		var sz := rig.size
+		_sub_screen.text = text
+		_sub_screen.pixel_size = sz.y * 0.0011 * k
+		_sub_screen.width = sz.x * 0.85 / _sub_screen.pixel_size
+		# Flat text in front of a curved screen: move it forward by the curve's depth at the text's width.
+		var z := 0.02
+		if rig._radius > 0.0:
+			z += rig._radius * (1.0 - cos(minf(sz.x * 0.85 * 0.5 / rig._radius, PI * 0.45)))
+		_sub_screen.position = Vector3(0, -sz.y * 0.5 + sz.y * 0.07, z)
+	elif _sub_head.visible:
+		_sub_head.text = text
+		_sub_head.pixel_size = 0.0011 * k
+		_sub_head.width = 1300.0
+		# Low in your view while watching; above the menu while it's open (it draws over everything).
+		var y := 0.36 if panel.visible else -0.3
+		_sub_head.position.y = lerpf(_sub_head.position.y, y, 0.25)
+
+
 func _build_panel() -> void:
 	viewport = SubViewport.new()
 	viewport.size = PANEL_PX
@@ -401,6 +523,8 @@ func _build_panel() -> void:
 	ui.hide_pressed.connect(_toggle_panel)
 	ui.setting_pressed.connect(_on_setting)
 	ui.volume_changed.connect(_on_volume)
+	ui.subs_pressed.connect(_cycle_subs)
+	ui.speed_pressed.connect(_cycle_speed)
 	ui.reset_screen_pressed.connect(_reset_screen)
 
 
@@ -413,6 +537,7 @@ func _process(delta: float) -> void:
 		_update_hand_pokes(delta)
 	ui.update_playback(engine.get_position(), engine.duration, engine.paused, engine.playing)
 	envs.update(engine.average_color, screen.global_transform, engine.playing and screen.visible, delta)
+	_update_subtitles()
 	_save_timer += delta
 	if _save_timer >= SAVE_EVERY:
 		_save_timer = 0.0
@@ -771,11 +896,137 @@ func _load_settings() -> void:
 	autohide_on = bool(store.get_setting("autohide", true))
 	menu_size_idx = clampi(int(store.get_setting("menu_size", 0)), 0, MENU_SIZES.size() - 1)
 	haptics_on = bool(store.get_setting("haptics", true))
+	subs_pref = str(store.get_setting("subs_pref", ""))
+	subs_size_idx = clampi(int(store.get_setting("subs_size", 1)), 0, SUB_SIZES.size() - 1)
 	YouTube.family_filter = bool(store.get_setting("family", true)) # on by default
 	var vol := clampf(float(store.get_setting("volume", 1.0)), 0.0, 1.0)
 	ui.volume_slider.set_value_no_signal(vol)
 	_apply_volume(vol)
 	_apply_accent()
+	_refresh_setting_labels()
+
+
+# --- Subtitles & speed --------------------------------------------------------------------------
+
+## New video: offer its tracks, and switch on the language you picked last time (human-made first).
+func _choose_subs(tracks: Array) -> void:
+	subs_tracks = tracks
+	subs_idx = -1
+	subs.clear()
+	if subs_pref != "":
+		for want_auto in [false, true]:
+			for i in tracks.size():
+				if subs_idx < 0 and tracks[i].code == subs_pref and tracks[i].auto == want_auto:
+					subs_idx = i
+	if subs_idx >= 0:
+		subs.load_url(tracks[subs_idx].url)
+	_refresh_subs_label()
+
+
+func _cycle_subs() -> void:
+	if subs_tracks.is_empty():
+		ui.set_status("This video has no subtitles." if current_url != "" else "Play a video first.")
+		return
+	subs_idx += 1
+	if subs_idx >= subs_tracks.size():
+		subs_idx = -1
+	subs.clear()
+	if subs_idx >= 0:
+		subs.load_url(subs_tracks[subs_idx].url)
+		subs_pref = subs_tracks[subs_idx].code
+	else:
+		subs_pref = ""
+	store.set_setting("subs_pref", subs_pref)
+	_refresh_subs_label()
+
+
+func _on_subs_loaded(ok: bool) -> void:
+	if not ok and subs_idx >= 0:
+		ui.set_status("Couldn't load those subtitles.")
+
+
+func _refresh_subs_label() -> void:
+	if subs_tracks.is_empty():
+		ui.subs_btn.text = "Subtitles: none"
+	elif subs_idx < 0:
+		ui.subs_btn.text = "Subtitles: Off"
+	else:
+		ui.subs_btn.text = "Subs: " + str(subs_tracks[subs_idx].name)
+
+
+func _cycle_speed() -> void:
+	speed_idx = (speed_idx + 1) % SPEEDS.size()
+	var s: float = SPEEDS[speed_idx]
+	engine.set_speed(s)
+	ui.speed_btn.text = "Speed: %s×" % (("%.2f" % s).rstrip("0").rstrip("."))
+
+
+# --- Parental lock (PIN) ------------------------------------------------------------------------
+
+func _pin_set() -> bool:
+	return str(store.get_setting("pin_hash", "")) != ""
+
+
+static func _pin_hash(code: String, salt: String) -> String:
+	var ctx := HashingContext.new()
+	ctx.start(HashingContext.HASH_SHA256)
+	ctx.update((salt + ":" + code).to_utf8_buffer())
+	return ctx.finish().hex_encode()
+
+
+func _ask_pin(prompt: String, hint := "") -> String:
+	if not panel.visible:
+		_toggle_panel()
+	ui.show_pin(prompt, hint)
+	var code: String = await ui.pin_done
+	return code
+
+
+## True if there's no lock, or the right PIN was entered. 5 wrong tries -> 60 s pause.
+func _check_pin() -> bool:
+	if not _pin_set():
+		return true
+	var now := Time.get_ticks_msec() / 1000.0
+	if now < _pin_lock_until:
+		ui.set_status("Too many wrong tries. Wait %d seconds." % int(_pin_lock_until - now))
+		return false
+	var code := await _ask_pin("Enter the parental PIN", "Forgot it? See \"How to install.txt\".")
+	ui.hide_pin()
+	if code == "":
+		return false
+	if _pin_hash(code, str(store.get_setting("pin_salt", ""))) == str(store.get_setting("pin_hash", "")):
+		_pin_fails = 0
+		return true
+	_pin_fails += 1
+	if _pin_fails >= 5:
+		_pin_fails = 0
+		_pin_lock_until = now + 60.0
+	ui.set_status("Wrong PIN.")
+	return false
+
+
+func _toggle_pin_lock() -> void:
+	if _pin_set():
+		if await _check_pin():
+			store.set_setting("pin_hash", "")
+			ui.set_status("Parental lock removed.")
+	else:
+		var a := await _ask_pin("Choose a 4-digit PIN", "You'll need it to turn off the family filter.")
+		if a == "":
+			ui.hide_pin()
+			return
+		var b := await _ask_pin("Enter the same PIN again")
+		ui.hide_pin()
+		if a != b:
+			ui.set_status("The PINs didn't match. Nothing was changed.")
+		else:
+			var salt := Crypto.new().generate_random_bytes(16).hex_encode()
+			store.set_setting("pin_salt", salt)
+			store.set_setting("pin_hash", _pin_hash(a, salt))
+			if not YouTube.family_filter: # the lock is about the filter, so make sure it's on
+				YouTube.family_filter = true
+				store.set_setting("family", true)
+			ui.set_status("Parental lock is on. The family-friendly filter stays on until the PIN is entered.")
 	_refresh_setting_labels()
 
 
@@ -794,7 +1045,23 @@ func _apply_volume(v: float) -> void:
 
 
 func _on_setting(key: String) -> void:
+	# Parental lock: these need the PIN (turning the filter ON never does).
+	var protected := key == "clear_history" or (key == "family" and YouTube.family_filter)
+	if protected and _pin_set():
+		if not await _check_pin():
+			return
+		if key == "clear_history":
+			_clear_confirm_until = Time.get_ticks_msec() / 1000.0 + 4.0 # the PIN was the confirmation
 	match key:
+		"pin":
+			_toggle_pin_lock()
+			return
+		"curve":
+			rig.set_curve((rig.curve_mode + 1) % ScreenRig.CURVES.size())
+			store.set_setting("screen_curve", rig.curve_mode)
+		"subs_size":
+			subs_size_idx = (subs_size_idx + 1) % SUB_SIZES.size()
+			store.set_setting("subs_size", subs_size_idx)
 		"environment":
 			envs.set_style((envs.style + 1) % Environments.STYLES.size())
 			store.set_setting("environment", envs.style)
@@ -871,6 +1138,9 @@ func _refresh_setting_labels() -> void:
 	ui.set_setting("menu_size", MENU_SIZES[menu_size_idx][0])
 	ui.set_setting("family", "On" if YouTube.family_filter else "Off")
 	ui.set_setting("haptics", "On" if haptics_on else "Off")
+	ui.set_setting("curve", ScreenRig.CURVES[rig.curve_mode])
+	ui.set_setting("subs_size", SUB_SIZES[subs_size_idx][0])
+	ui.set_setting("pin", "On (change)" if _pin_set() else "Off (set a PIN)")
 	if Time.get_ticks_msec() / 1000.0 > _clear_confirm_until:
 		ui.set_setting("clear_history", "Clear (%d)" % store.history.size() if not store.history.is_empty() else "Empty")
 
@@ -896,6 +1166,8 @@ func _reset_screen() -> void:
 
 
 func _cycle_account() -> void:
+	if _pin_set() and not await _check_pin(): # parental lock: signing in can unlock age-restricted videos
+		return
 	account_idx = (account_idx + 1) % ACCOUNTS.size()
 	store.set_setting("account", ACCOUNTS[account_idx])
 	_apply_account()
@@ -1164,6 +1436,7 @@ func _on_resolved(r: Dictionary, id: int, url: String, start: float, keep_projec
 		_set_projection(YouTube.guess_projection(r))
 	store.touch(url, r.title, r.duration, r.get("channel", ""), int(r.get("views", 0)))
 	_refresh_setting_labels() # history count
+	_choose_subs(r.get("subs", []))
 	ui.set_title("%s   (%dx%d %s)" % [r.title, r.width, r.height, r.vcodec.get_slice(".", 0)])
 
 

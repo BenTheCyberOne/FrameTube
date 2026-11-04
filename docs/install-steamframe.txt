@@ -48,3 +48,11 @@ IF SOMETHING GOES WRONG
 - Age-restricted videos, your subscriptions, Watch later: open Settings > YouTube account.
   Sign in to YouTube in Firefox in Desktop Mode first, then pick Firefox there.
 - The 3D looks "inside out": turn on "Swap eyes".
+
+FORGOT THE PARENTAL PIN?
+------------------------
+Close FrameTube, then delete the file "settings.cfg" in FrameTube's data folder:
+  Windows:      %APPDATA%\Godot\app_userdata\FrameTube
+                (paste that into the address bar of a File Explorer window)
+  Steam Frame:  ~/.local/share/godot/app_userdata/FrameTube   (in Desktop Mode)
+This removes the PIN and resets FrameTube's settings. Your watch history is kept.

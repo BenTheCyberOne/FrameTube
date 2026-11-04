@@ -122,6 +122,23 @@ page takes over on first run while the helpers download (progress bar, "Try agai
   - *Room & look*: Room, Fidget toy, Vibration, Colour theme, Ambient glow, Glow effects.
   - *Advanced*: Video decoding, Repair (re-downloads the helpers), version info.
 - **Volume** slider in the player controls (desktop: ↑/↓), remembered between sessions.
+- **Subtitles** (player row): cycles Off and the video's tracks: every human-made one, plus auto-generated
+  captions in the video's language and English (YouTube's ~100 machine translations are skipped). Fetched as
+  YouTube's `json3` timed text (`scripts/subtitles.gd`) and timed off the video clock. Shown on the lower part of
+  a flat screen (pushed forward on curved screens) or head-locked low in your view for 360°/180° (above the
+  menu while it's open). The chosen language switches on automatically for the next video. Size: Settings >
+  Subtitle size.
+- **Speed** (player row): 0.5× to 2×. ffmpeg retimes the video (`setpts`, output stays at the source fps so
+  2× costs no extra decoding) and the audio (`atempo`, which keeps the pitch); the engine's clock runs at the
+  chosen speed. Measured at 2×: media time +2.0 s per second, A/V within ±17 ms.
+- **Screen shape** (Settings > Watching): Flat, Curved (radius 1.8× the viewing distance) or Extra curved
+  (radius = distance, so every point is equally far away). It's a generated arc mesh that follows the distance
+  as you move the screen; the laser uses a ray-cylinder test.
+- **Parental lock** (Settings > Safety & account): a 4-digit PIN, typed twice on a keypad, stored as a salted
+  SHA-256 hash. Once set, it's needed to turn the family filter **off**, change the YouTube account, clear
+  history, or change/remove the lock. Turning the filter on never asks. 5 wrong tries pause input for 60 s.
+  Forgotten PIN: delete `settings.cfg` in the app's data folder (the install guides explain where). This is a
+  deterrent for kids, not a security boundary against someone who can use the file manager.
 - **Family-friendly filter**: hides results whose title, description or channel contain adult, gore or horror
   words (whole-word list in `youtube.gd`, `FAMILY_BLOCK`), asks YouTube to leave the worst terms out of every
   search (`-sexy -lingerie …`), and refuses videos YouTube marks 18+ even if a link is pasted. The status line

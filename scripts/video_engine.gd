@@ -40,6 +40,7 @@ var height := 0
 var fps := 30.0
 var duration := 0.0
 var playing := false
+var speed := 1.0 # playback speed (0.5 - 2.0); media time runs `speed` x real time
 var paused := false
 var buffering := false
 
@@ -155,6 +156,13 @@ func get_position() -> float:
 
 
 ## Switch decoder (index into `decoders`); restarts the current video at the same spot.
+## Change playback speed (audio pitch is kept); restarts decoding at the current spot.
+func set_speed(s: float) -> void:
+	speed = clampf(s, 0.5, 2.0)
+	if playing:
+		_restart(get_position())
+
+
 func set_decoder(index: int) -> void:
 	preferred_decoder = clampi(index, 0, decoders.size() - 1)
 	decoder_index = preferred_decoder
@@ -186,7 +194,7 @@ func stats() -> Dictionary:
 	_mutex.unlock()
 	if _gen != null and _audio_pushed > 0:
 		var filled := _gen_capacity - _gen.get_frames_available()
-		var audio_t := _audio_base + float(_audio_pushed - filled) / _mix_rate - AudioServer.get_output_latency()
+		var audio_t := _audio_base + (float(_audio_pushed - filled) / _mix_rate - AudioServer.get_output_latency()) * speed
 		d["av_ms"] = int((audio_t - get_position()) * 1000.0) # + = audio ahead of picture
 	return d
 
@@ -259,7 +267,7 @@ func _process(delta: float) -> void:
 		_start_audio_output()
 	if not paused:
 		_feed_audio()
-		_clock += delta
+		_clock += delta * speed
 		_sync_to_audio()
 	_present()
 	_check_end()
@@ -299,8 +307,8 @@ func _start_audio_output() -> void:
 	_gen_capacity = _gen.get_frames_available()
 	_audio_pushed = 0
 	var late := get_position() - _audio_start
-	_audio_drop = int(late * _mix_rate) if late > 0.0 else 0
-	_audio_base = _audio_start + _audio_drop / _mix_rate
+	_audio_drop = int(late / speed * _mix_rate) if late > 0.0 else 0 # output samples are real time
+	_audio_base = _audio_start + _audio_drop / _mix_rate * speed
 
 
 func _feed_audio() -> void:
@@ -347,7 +355,7 @@ func _sync_to_audio() -> void:
 	var filled := _gen_capacity - _gen.get_frames_available()
 	if drained and _pending.is_empty() and filled <= 0:
 		return # audio is over; let the wall clock run out the video
-	var audio_t := _audio_base + float(_audio_pushed - filled) / _mix_rate - AudioServer.get_output_latency()
+	var audio_t := _audio_base + (float(_audio_pushed - filled) / _mix_rate - AudioServer.get_output_latency()) * speed
 	if audio_t < _audio_base:
 		return
 	var diff := audio_t - get_position()
@@ -462,7 +470,7 @@ func _spawn_video(s: int) -> bool:
 	var args := _input_args(_start_time, _video_url, hw)
 	args.append_array([
 		"-an", "-sn", "-dn",
-		"-vf", "scale=%d:%d" % [width, height],
+		"-vf", ("setpts=PTS/%.3f," % speed if speed != 1.0 else "") + "scale=%d:%d" % [width, height],
 		"-pix_fmt", "nv12", "-r", str(fps),
 		"-f", "rawvideo", "pipe:1",
 	])
@@ -485,6 +493,7 @@ func _spawn_audio(s: int, t := -1.0) -> void:
 	args.append_array([
 		"-vn", "-sn", "-dn",
 		"-ac", "2", "-ar", str(int(_mix_rate)),
+	] + (["-af", "atempo=%.3f" % speed] if speed != 1.0 else []) + [
 		"-f", "f32le", "pipe:1",
 	])
 	if not _spawn(args, _audio_loop, s):
@@ -551,7 +560,7 @@ func _video_loop(s: int, pipe: FileAccess, err: FileAccess) -> void:
 	var ysize := w * h
 	var uvsize := cw * ch * 2 # interleaved U,V
 	var start := _start_time
-	var frame_dur := 1.0 / fps
+	var frame_dur := speed / fps # media seconds per output frame
 	var n := 0
 	while s == _session:
 		var y := _read_exact(pipe, ysize, s)

@@ -62,6 +62,17 @@ var setup_bar: ProgressBar
 var setup_retry: Button
 var about_label: Label
 var settings_list: VBoxContainer
+var subs_btn: Button
+var speed_btn: Button
+signal subs_pressed
+signal speed_pressed
+var pin_page: VBoxContainer
+var pin_prompt: Label
+var pin_dots: Label
+var pin_hint: Label
+var _pin := ""
+signal pin_done(code: String) # "" = cancelled
+const PIN_LENGTH := 4
 var volume_slider: HSlider
 signal volume_changed(v: float) # 0..1
 var tab_browse: Button
@@ -184,12 +195,15 @@ func _ready() -> void:
 	_setting_row("end_action", "When a video ends", "Stop, play it again, or play the next video in the list")
 	_setting_row("autohide", "Hide the menu while watching", "Tucks the menu away a few seconds after a video starts")
 	_setting_row("menu_size", "Menu size", "Bigger menu and text, easier to read")
+	_setting_row("curve", "Screen shape", "Curve the screen around you, like a cinema")
+	_setting_row("subs_size", "Subtitle size", "How big subtitles are")
 	_section("Safety & account")
 	_setting_row("family", "Family-friendly filter",
 		"Hides videos with adult or gory words in them, and blocks 18+ videos")
 	_setting_row("account", "YouTube account",
 		"Sign in to YouTube in this browser on this computer first. Unlocks subscriptions & age-limited videos.")
 	_setting_row("clear_history", "Watch history", "Remove everything from \"Continue watching\"")
+	_setting_row("pin", "Parental lock", "A 4-digit PIN is needed to turn off the filter, change the account or clear history")
 	_section("Room & look")
 	_setting_row("environment", "Room", "What's around you when watching normal videos")
 	_setting_row("toy", "Fidget toy", "Grab it with the grip button, throw it, or swipe it to spin")
@@ -237,6 +251,38 @@ func _ready() -> void:
 	setup_retry.custom_minimum_size.x = 260
 	setup_retry.visible = false
 	setup_page.add_child(setup_retry)
+
+	# --- PIN page (parental lock): prompt, dots, 3x4 keypad
+	pin_page = VBoxContainer.new()
+	pin_page.add_theme_constant_override("separation", 16)
+	pin_page.size_flags_vertical = SIZE_EXPAND_FILL
+	pin_page.alignment = BoxContainer.ALIGNMENT_CENTER
+	pin_page.visible = false
+	root.add_child(pin_page)
+	pin_prompt = Label.new()
+	pin_prompt.add_theme_font_size_override("font_size", 34)
+	pin_prompt.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	pin_page.add_child(pin_prompt)
+	pin_dots = Label.new()
+	pin_dots.add_theme_font_size_override("font_size", 54)
+	pin_dots.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	pin_dots.set_meta("accent_text", true)
+	pin_page.add_child(pin_dots)
+	pin_hint = Label.new()
+	pin_hint.add_theme_color_override("font_color", TEXT_DIM)
+	pin_hint.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	pin_page.add_child(pin_hint)
+	var pad := GridContainer.new()
+	pad.columns = 3
+	pad.size_flags_horizontal = SIZE_SHRINK_CENTER
+	pad.add_theme_constant_override("h_separation", 12)
+	pad.add_theme_constant_override("v_separation", 12)
+	pin_page.add_child(pad)
+	for k in ["1", "2", "3", "4", "5", "6", "7", "8", "9", "Cancel", "0", "Delete"]:
+		var b := _button(k, _pin_key.bind(k))
+		b.custom_minimum_size = Vector2(170, 84)
+		b.add_theme_font_size_override("font_size", 34 if k.length() == 1 else 24)
+		pad.add_child(b)
 
 	# --- Now playing + player controls (always visible)
 	player_box = VBoxContainer.new()
@@ -308,7 +354,7 @@ func _ready() -> void:
 	var view := HBoxContainer.new()
 	view.add_theme_constant_override("separation", 8)
 	player_box.add_child(view)
-	proj_btn = _button("Video type: Normal", func(): projection_pressed.emit())
+	proj_btn = _button("Type: Normal", func(): projection_pressed.emit())
 	proj_btn.size_flags_horizontal = SIZE_EXPAND_FILL
 	view.add_child(proj_btn)
 	screen_btn = _button("Screen: M", func(): screen_size_pressed.emit())
@@ -316,8 +362,13 @@ func _ready() -> void:
 	view.add_child(_button("Reset", func(): reset_screen_pressed.emit()))
 	quality_btn = _button("Quality: 4K", func(): quality_pressed.emit())
 	view.add_child(quality_btn)
+	subs_btn = _button("Subtitles: Off", func(): subs_pressed.emit())
+	view.add_child(subs_btn)
+	speed_btn = _button("Speed: 1×", func(): speed_pressed.emit())
+	view.add_child(speed_btn)
 	swap_btn = CheckButton.new()
 	swap_btn.text = "Swap eyes"
+	swap_btn.tooltip_text = "Fixes 3D that looks inside out"
 	swap_btn.focus_mode = FOCUS_NONE
 	swap_btn.toggled.connect(func(on: bool): swap_eyes_toggled.emit(on))
 	view.add_child(swap_btn)
@@ -347,6 +398,43 @@ func show_setup(on: bool) -> void:
 	setup_retry.visible = false
 	if not on:
 		show_page(false)
+
+
+## Parental-lock keypad. Emits pin_done(code) after 4 digits, or pin_done("") on Cancel.
+func show_pin(prompt: String, hint := "") -> void:
+	_pin = ""
+	pin_prompt.text = prompt
+	pin_hint.text = hint
+	pin_dots.text = "○ ○ ○ ○"
+	pin_page.visible = true
+	browse_page.visible = false
+	settings_page.visible = false
+	for t in [tab_browse, tab_settings]:
+		t.disabled = true
+
+
+func hide_pin(back_to_settings := true) -> void:
+	pin_page.visible = false
+	for t in [tab_browse, tab_settings]:
+		t.disabled = false
+	show_page(back_to_settings)
+
+
+func _pin_key(k: String) -> void:
+	match k:
+		"Cancel":
+			pin_done.emit("")
+			return
+		"Delete":
+			_pin = _pin.left(-1)
+		_:
+			if _pin.length() < PIN_LENGTH:
+				_pin += k
+	pin_dots.text = " ".join(PackedStringArray(range(PIN_LENGTH).map(func(i): return "●" if i < _pin.length() else "○")))
+	if _pin.length() == PIN_LENGTH:
+		var code := _pin
+		_pin = ""
+		pin_done.emit(code)
 
 
 func set_setup_progress(text: String, fraction: float) -> void:
@@ -502,7 +590,7 @@ func set_title(text: String) -> void:
 
 
 func set_projection_name(text: String) -> void:
-	proj_btn.text = "Video type: " + text
+	proj_btn.text = "Type: " + text
 
 
 func set_quality(height: int) -> void:

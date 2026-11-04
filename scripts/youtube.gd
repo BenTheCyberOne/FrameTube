@@ -87,6 +87,44 @@ static func list(target: String, count := 30) -> Dictionary:
 	return {"results": results, "hidden": hidden}
 
 
+## Subtitle choices for a video: every human-made track, plus auto-generated captions in the video's own
+## language and in English (YouTube machine-translates auto captions into ~100 languages; those are skipped).
+## Each: {code, name, auto, url} with url pointing at YouTube's clean "json3" timed-text format.
+static func subtitle_tracks(data: Dictionary) -> Array:
+	var tracks := []
+	var seen := {}
+	var lang := _str(data, "language")
+	for pass_auto in [false, true]:
+		var src = data.get("automatic_captions" if pass_auto else "subtitles")
+		if not src is Dictionary:
+			continue
+		for code: String in src:
+			if code == "live_chat" or seen.has(code + str(pass_auto)):
+				continue
+			var base := code.get_slice("-", 0)
+			if pass_auto and not (code.ends_with("-orig") or base == "en" or (lang != "" and base == lang)):
+				continue
+			if pass_auto and code != base and not code.ends_with("-orig"):
+				continue # skip regional duplicates of auto captions
+			var url := ""
+			var name := code
+			for f in src[code]:
+				if f is Dictionary and _str(f, "ext") == "json3":
+					url = _str(f, "url")
+					name = _str(f, "name", code)
+			if url == "":
+				continue
+			seen[code + str(pass_auto)] = true
+			name = name.replace(" (Original)", "").strip_edges() + (" (auto)" if pass_auto else "")
+			if seen.has("name:" + name):
+				continue # e.g. auto "en" and "en-orig" are the same English captions
+			seen["name:" + name] = true
+			tracks.append({"code": base, "name": name, "auto": pass_auto, "url": url})
+			if tracks.size() >= 10:
+				return tracks
+	return tracks
+
+
 ## Quick visual tags from the title (search results don't carry projection or resolution metadata).
 static func title_badges(title: String, live := false) -> PackedStringArray:
 	var t := title.to_lower()
@@ -146,6 +184,7 @@ static func resolve(url: String, max_height: int) -> Dictionary:
 	var ua: String = str(headers.get("User-Agent", "")) if headers is Dictionary else ""
 	var ch := _str(data, "channel")
 	return {
+		"subs": subtitle_tracks(data),
 		"probe": probe_vr(_str(v, "url"), ua),
 		"id": _str(data, "id"),
 		"channel": ch if ch != "" else _str(data, "uploader"),

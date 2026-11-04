@@ -23,6 +23,10 @@ var store: Store
 var height := DEFAULT_HEIGHT
 var aspect := 16.0 / 9.0
 var custom := false # placed by hand; otherwise it sits at the default spot in front of you
+var curve_mode := 0 # 0 flat, 1 curved, 2 extra curved
+var size := Vector2(DEFAULT_HEIGHT * 16.0 / 9.0, DEFAULT_HEIGHT) # arc length x height for curved screens
+var _radius := 0.0 # curvature radius of the current mesh (0 = flat)
+const CURVES := ["Flat", "Curved", "Extra curved"]
 
 var _grabs := {} # holder (controller node or "mouse") -> {dist, local: Vector2, h, regrab}
 var _two := {} # two-hand scaling: {sep0, h0}
@@ -38,6 +42,7 @@ func setup(p_screen: MeshInstance3D, p_camera: Camera3D, p_store: Store) -> void
 	custom = bool(store.get_setting("screen_custom", false))
 	if custom:
 		screen.transform = store.get_setting("screen_xform", screen.transform)
+	curve_mode = clampi(int(store.get_setting("screen_curve", 0)), 0, CURVES.size() - 1)
 	apply_size()
 
 
@@ -47,17 +52,78 @@ func set_aspect(a: float) -> void:
 
 
 func apply_size() -> void:
-	var size := Vector2(height * aspect, height)
+	size = Vector2(height * aspect, height)
 	var max_w := height * 3.0 # keep ultra-wide videos from wrapping around you
 	if size.x > max_w:
 		size *= max_w / size.x
-	(screen.mesh as QuadMesh).size = size
+	_rebuild_mesh(true)
+
+
+func set_curve(mode: int) -> void:
+	curve_mode = clampi(mode, 0, CURVES.size() - 1)
+	_rebuild_mesh(true)
+
+
+## Curvature follows the viewing distance: "Curved" bends gently, "Extra curved" wraps the screen
+## around you (every point the same distance away, like an IMAX dome). Rebuilt when it changes noticeably.
+func _rebuild_mesh(force: bool) -> void:
+	if curve_mode == 0:
+		if force or not screen.mesh is QuadMesh:
+			var q := QuadMesh.new()
+			q.size = size
+			screen.mesh = q
+			_radius = 0.0
+		return
+	var d := distance() if camera and screen.is_inside_tree() else DEFAULT_DIST
+	if d < 0.5:
+		d = DEFAULT_DIST
+	var r := d * (1.8 if curve_mode == 1 else 1.0)
+	r = maxf(r, (size.x * 0.5) / deg_to_rad(75.0)) # never wrap more than 150 degrees
+	if not force and _radius > 0.0 and absf(r - _radius) / _radius < 0.05:
+		return
+	_radius = r
+	screen.mesh = _arc_mesh(size, r)
+
+
+## Cylindrical strip: centre at the origin facing +Z, edges bending towards the viewer.
+static func _arc_mesh(sz: Vector2, r: float) -> ArrayMesh:
+	var n := 48
+	var half := (sz.x * 0.5) / r
+	var verts := PackedVector3Array()
+	var norms := PackedVector3Array()
+	var uvs := PackedVector2Array()
+	for i in n + 1:
+		var a := -half + 2.0 * half * i / n
+		var x := r * sin(a)
+		var z := r * (1.0 - cos(a))
+		var nrm := Vector3(-sin(a), 0, cos(a))
+		for row in 2: # top, bottom
+			verts.append(Vector3(x, sz.y * (0.5 - row), z))
+			norms.append(nrm)
+			uvs.append(Vector2(float(i) / n, row))
+	var idx := PackedInt32Array()
+	for i in n: # Godot's front faces wind clockwise
+		var tl := i * 2
+		var bl := tl + 1
+		var tr := tl + 2
+		var br := tl + 3
+		idx.append_array([tl, tr, br, tl, br, bl])
+	var arr := []
+	arr.resize(Mesh.ARRAY_MAX)
+	arr[Mesh.ARRAY_VERTEX] = verts
+	arr[Mesh.ARRAY_NORMAL] = norms
+	arr[Mesh.ARRAY_TEX_UV] = uvs
+	arr[Mesh.ARRAY_INDEX] = idx
+	var m := ArrayMesh.new()
+	m.add_surface_from_arrays(Mesh.PRIMITIVE_TRIANGLES, arr)
+	return m
 
 
 ## Default spot (unless the user placed it): straight ahead at eye height. Local to `content`.
 func place_default(eye_y: float) -> void:
 	if not custom:
 		screen.transform = Transform3D(Basis.IDENTITY, Vector3(0, eye_y, -DEFAULT_DIST))
+	_rebuild_mesh(true) # curvature depends on where you are now
 
 
 func reset(eye_y: float) -> void:
@@ -105,16 +171,42 @@ func hit(origin: Vector3, dir: Vector3) -> Variant:
 	var inv := screen.global_transform.affine_inverse()
 	var lo := inv * origin
 	var ld := inv.basis * dir
+	if _radius > 0.0:
+		return _hit_curved(lo, ld)
 	if absf(ld.z) < 1e-6:
 		return null
 	var t := -lo.z / ld.z
 	if t <= 0.0:
 		return null
 	var p := lo + ld * t
-	var size := (screen.mesh as QuadMesh).size
 	if absf(p.x) > size.x * 0.5 or absf(p.y) > size.y * 0.5:
 		return null
 	return {"local": Vector2(p.x, p.y), "dist": t}
+
+
+## Ray vs. the curved strip (a cylinder around local Y, centred at z = radius). local.x = arc length.
+func _hit_curved(lo: Vector3, ld: Vector3) -> Variant:
+	var r := _radius
+	var ox := lo.x
+	var oz := lo.z - r
+	var a := ld.x * ld.x + ld.z * ld.z
+	if a < 1e-9:
+		return null
+	var b := 2.0 * (ox * ld.x + oz * ld.z)
+	var c := ox * ox + oz * oz - r * r
+	var disc := b * b - 4.0 * a * c
+	if disc < 0.0:
+		return null
+	var sq := sqrt(disc)
+	var half := (size.x * 0.5) / r
+	for t in [(-b - sq) / (2.0 * a), (-b + sq) / (2.0 * a)]:
+		if t <= 0.0:
+			continue
+		var p: Vector3 = lo + ld * t
+		var ang := atan2(p.x, r - p.z)
+		if r - p.z > 0.0 and absf(ang) <= half and absf(p.y) <= size.y * 0.5:
+			return {"local": Vector2(r * ang, p.y), "dist": t}
+	return null
 
 
 func holding(holder: Variant) -> bool:
@@ -175,6 +267,7 @@ func drag(rays: Dictionary) -> void:
 	target /= _grabs.size()
 	local /= _grabs.size()
 	_place_by_point(target, local)
+	_rebuild_mesh(false)
 	custom = true
 	changed.emit(describe())
 
@@ -193,6 +286,7 @@ func adjust(resize: float, push: float, holder: Variant = null) -> void:
 			var nd := clampf(d.length() * exp(push), MIN_DIST, MAX_DIST)
 			var c := cam + d.normalized() * nd
 			screen.global_transform = Transform3D(_facing(c), c)
+			_rebuild_mesh(false)
 			custom = true
 	_save_soon()
 	changed.emit(describe())
