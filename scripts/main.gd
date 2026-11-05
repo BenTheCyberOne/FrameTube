@@ -189,6 +189,7 @@ func _run_autotest() -> void:
 		var url: String = opts["download-test"]
 		var h := int(opts.get("dl-height", "360"))
 		store.persist = false
+		subs_pref = str(opts.get("subs-lang", subs_pref))
 		var info: Dictionary = await _await_async(func(): return YouTube.resolve(url, h))
 		if info.has("error"):
 			print("[dl] resolve error: ", info.error)
@@ -208,15 +209,20 @@ func _run_autotest() -> void:
 		print("[dl] ok=%s in %.1fs: %s" % [r[1], (Time.get_ticks_msec() - t0) / 1000.0, r[2]])
 		if r[1]:
 			var e: Dictionary = downloads.items[r[0]]
-			print("[dl] file=%s bytes=%d exists=%s" % [e.file, e.bytes, FileAccess.file_exists(e.file)])
+			print("[dl] file=%s bytes=%d exists=%s subs=%s" % [e.file, e.bytes, FileAccess.file_exists(e.file),
+				e.subs.map(func(t): return "%s:%s" % [t.name, FileAccess.file_exists(t.url)])])
 			_play(url, 0.0)
 			await get_tree().create_timer(6.0).timeout
 			print("[dl] offline play: title='%s' pos=%.1f stats=%s" % [ui.title_label.text, engine.get_position(), engine.stats()])
+			print("[dl] offline subs: tracks=%s on=%s cues=%d text_at_8s='%s'" % [subs_tracks.map(func(t): return t.name),
+				subs_tracks[subs_idx].name if subs_idx >= 0 else "off", subs.cues.size(), subs.text_at(8.0).replace("
+", " / ")])
 			current_url = url
 			_on_download_pressed()
 			_on_download_pressed() # press twice = delete
 			await get_tree().create_timer(2.0).timeout
-			print("[dl] after delete: saved=%s exists=%s" % [downloads.has(r[0]), FileAccess.file_exists(e.file)])
+			print("[dl] after delete: saved=%s exists=%s leftover=%s" % [downloads.has(r[0]), FileAccess.file_exists(e.file),
+				Array(DirAccess.get_files_at(Downloads.folder())).filter(func(f): return f.contains(r[0]))])
 		get_tree().quit()
 		return
 	if opts.has("signin-test"):

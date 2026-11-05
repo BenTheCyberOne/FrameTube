@@ -18,8 +18,13 @@ func clear() -> void:
 		_http.cancel_request()
 
 
+## A web address, or a saved .json3 file (downloads).
 func load_url(url: String) -> void:
 	clear()
+	if not url.begins_with("http"):
+		cues = parse_json3(FileAccess.get_file_as_string(url)) if FileAccess.file_exists(url) else []
+		loaded.emit.call_deferred(not cues.is_empty())
+		return
 	if _http == null:
 		_http = HTTPRequest.new()
 		_http.use_threads = true

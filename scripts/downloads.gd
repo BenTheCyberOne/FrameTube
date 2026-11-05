@@ -81,6 +81,8 @@ func remove(id: String) -> void:
 		return
 	var f: String = items[id].file
 	_remove_file(f, 10)
+	for t in items[id].get("subs", []):
+		DirAccess.remove_absolute(str(t.url))
 	items.erase(id)
 	_save()
 	changed.emit()
@@ -106,8 +108,12 @@ func local_info(url: String) -> Dictionary:
 		return {}
 	return {"id": id, "title": e.title, "channel": e.channel, "views": e.views, "duration": e.duration,
 		"width": e.width, "height": e.height, "fps": e.fps, "vcodec": e.vcodec, "is_live": false,
-		"video_url": e.file, "audio_url": e.file, "user_agent": "", "subs": [], "probe": {},
+		"video_url": e.file, "audio_url": e.file, "user_agent": "", "subs": _local_subs(e), "probe": {},
 		"projection_hint": e.projection, "age_limit": e.age_limit, "offline": true}
+
+
+func _local_subs(e: Dictionary) -> Array:
+	return e.get("subs", []).filter(func(t): return FileAccess.file_exists(str(t.url)))
 
 
 ## For the Browse page's "Downloads" list (newest first).
@@ -266,11 +272,51 @@ func _finished(job: Dictionary, path: String, error: String) -> void:
 			"views": int(info.get("views", 0)), "duration": float(info.get("duration", 0.0)),
 			"width": int(info.get("width", 0)), "height": int(info.get("height", 0)), "fps": float(info.get("fps", 30.0)),
 			"vcodec": str(info.get("vcodec", "")), "projection": int(job.projection), "age_limit": int(info.get("age_limit", 0)),
-			"file": path, "bytes": _file_size(path), "added": int(Time.get_unix_time_from_system())}
+			"file": path, "bytes": _file_size(path), "added": int(Time.get_unix_time_from_system()), "subs": []}
 		_save()
-		done.emit(id, true, "Saved \"%s\" for offline watching (%s)." % [items[id].title, size_text(items[id].bytes)])
+		changed.emit()
+		var n := await _save_subs(id, info.get("subs", []))
+		if not items.has(id): # deleted while the subtitles were saving
+			_next()
+			return
+		done.emit(id, true, "Saved \"%s\" for offline watching (%s%s)." % [items[id].title, size_text(items[id].bytes),
+			"" if n == 0 else ", %d subtitle track%s" % [n, "" if n == 1 else "s"]])
 	changed.emit()
 	_next()
+
+
+## Saves the video's subtitle tracks (json3, as streamed) next to the file, so they work offline too.
+## A track that fails to download is just skipped. Returns how many were saved.
+func _save_subs(id: String, tracks: Array) -> int:
+	if tracks.is_empty():
+		return 0
+	var http := HTTPRequest.new()
+	http.timeout = 20.0
+	add_child(http)
+	var base: String = str(items[id].file).get_basename()
+	var saved := []
+	for t in tracks:
+		var dest := "%s.%s%s.json3" % [base, t.code, "-auto" if t.get("auto", false) else ""]
+		var n := 2
+		while saved.any(func(x): return x.url == dest):
+			dest = "%s.%s%s-%d.json3" % [base, t.code, "-auto" if t.get("auto", false) else "", n]
+			n += 1
+		http.download_file = dest
+		if http.request(str(t.url)) != OK:
+			continue
+		var r: Array = await http.request_completed
+		if r[0] == HTTPRequest.RESULT_SUCCESS and r[1] == 200 and FileAccess.file_exists(dest):
+			saved.append({"code": t.code, "name": t.name, "auto": t.get("auto", false), "url": dest})
+		else:
+			DirAccess.remove_absolute(dest)
+	http.queue_free()
+	if items.has(id):
+		items[id].subs = saved
+		_save()
+	else:
+		for x in saved: # the video was deleted meanwhile
+			DirAccess.remove_absolute(x.url)
+	return saved.size()
 
 
 ## yt-dlp leaves .part / per-format files behind when stopped; they all carry the video id.
