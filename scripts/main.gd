@@ -6,7 +6,6 @@ const PROJECTIONS := ["Normal", "3D side-by-side", "360°", "360° 3D", "180°",
 const QUALITIES := [1080, 1440, 2160, 2880, 4320]
 const PANEL_PX := Vector2i(1500, 1050)
 const PANEL_M := Vector2(1.5, 1.05)
-const ACCOUNTS := ["", "firefox", "chrome", "edge", "brave", "chromium"] # yt-dlp --cookies-from-browser names
 const SAVE_EVERY := 5.0
 const MENU_SIZES := [["Normal", 1.0], ["Large", 1.2], ["Extra large", 1.4]]
 const END_ACTIONS := ["Stop", "Replay", "Play next"]
@@ -43,7 +42,9 @@ var projection := 0
 var quality_idx := 2
 var rig: ScreenRig
 var screen_hits := {} # controller -> ray hit on the video screen (or null)
-var account_idx := 0
+var signin: SignIn
+var _signin_choice := 0 # which browser the next sign-in uses (moves on after a failed try)
+var _signout_confirm_until := 0.0
 var _save_timer := 0.0
 var current_url := ""
 var _last_info := {}
@@ -104,6 +105,12 @@ func _ready() -> void:
 	ui.decoder_pressed.connect(_cycle_decoder)
 	engine.finished.connect(_on_finished)
 
+	signin = SignIn.new()
+	add_child(signin)
+	signin.progress.connect(func(t: String):
+		ui.set_status(t)
+		_apply_account())
+	signin.finished.connect(_on_signin_finished)
 	_load_settings()
 	_set_projection(YouTube.FLAT)
 	ui.auto_keyboard = xr_mode # VR: on-screen keyboard pops up when you tap the search box
@@ -132,6 +139,32 @@ func _run_autotest() -> void:
 	if not opts.has("play"):
 		return
 	_autotest_running = not opts.has("welcome") # --welcome: keep the real startup list + menu auto-hide
+	if opts.has("signin-test"):
+		# --signin-test=<browser name>: the real sign-in flow against a headless browser on youtube.com,
+		# treating YouTube's visitor cookie as "signed in". Writes to a test file, never cookies.txt.
+		var list := SignIn.available()
+		print("[signin] browsers: ", list.map(func(b): return b.name))
+		var idx := 0
+		for i in list.size():
+			if list[i].name.to_lower() == str(opts["signin-test"]).to_lower():
+				idx = i
+		signin.headless = not opts.has("visible")
+		signin.start_url = "https://www.youtube.com/"
+		signin.test_cookie = "VISITOR_INFO1_LIVE"
+		signin.out_path = OS.get_user_data_dir().path_join("signin-test-cookies.txt")
+		var t0 := Time.get_ticks_msec()
+		signin.start(idx)
+		var r: Array = await signin.finished
+		print("[signin] ok=%s in %.1fs: %s" % [r[0], (Time.get_ticks_msec() - t0) / 1000.0, r[1]])
+		var saved := FileAccess.get_file_as_string(signin.out_path)
+		print("[signin] saved lines=%d has_visitor=%s profile_left=%s" % [saved.count("
+"),
+			saved.contains("VISITOR_INFO1_LIVE"), DirAccess.dir_exists_absolute(signin._profile)])
+		DirAccess.remove_absolute(signin.out_path)
+		await get_tree().create_timer(4.0).timeout
+		print("[signin] after cleanup profile_left=%s" % DirAccess.dir_exists_absolute(signin._profile))
+		get_tree().quit()
+		return
 	if opts.has("setup-test"): # --setup-test: run the real first-run download into user://bin, then quit
 		_repair()
 		var ok: Array = await setup.finished
@@ -531,6 +564,7 @@ func _build_panel() -> void:
 # --- Frame loop ---------------------------------------------------------------------------------
 
 func _process(delta: float) -> void:
+	_check_signin_expired()
 	sphere.global_position = camera.global_position
 	if xr_mode:
 		_update_xr_pointers(delta)
@@ -884,7 +918,6 @@ func _load_settings() -> void:
 	var swap := bool(store.get_setting("swap_eyes", false))
 	ui.swap_btn.set_pressed_no_signal(swap)
 	video_mat.set_shader_parameter("swap_eyes", swap)
-	account_idx = maxi(ACCOUNTS.find(str(store.get_setting("account", ""))), 0)
 	_apply_account()
 	accent_idx = clampi(int(store.get_setting("accent_idx", 0)), 0, ACCENTS.size() - 1)
 	envs.bias_light = bool(store.get_setting("bias", true))
@@ -1165,22 +1198,58 @@ func _reset_screen() -> void:
 	ui.set_screen_size(rig.preset_label())
 
 
+## Settings > YouTube account: Sign in (opens a private browser window), Cancel, or Sign out.
 func _cycle_account() -> void:
+	if signin.active():
+		signin.cancel()
+		return
 	if _pin_set() and not await _check_pin(): # parental lock: signing in can unlock age-restricted videos
 		return
-	account_idx = (account_idx + 1) % ACCOUNTS.size()
-	store.set_setting("account", ACCOUNTS[account_idx])
+	if SignIn.signed_in():
+		var now := Time.get_ticks_msec() / 1000.0
+		if now < _signout_confirm_until or _pin_set(): # second press (or the PIN was the confirmation)
+			_signout_confirm_until = 0.0
+			SignIn.sign_out()
+			_apply_account()
+			ui.set_status("Signed out of YouTube.")
+		else:
+			_signout_confirm_until = now + 4.0
+			ui.set_status("Press \"Signed in\" again to sign out.")
+		return
+	signin.start(_signin_choice)
 	_apply_account()
-	if ACCOUNTS[account_idx] != "":
-		ui.set_status("Using your %s login. Sign in to YouTube in %s first; Chrome/Edge on Windows may block this (Firefox works best)." % [ACCOUNTS[account_idx], ACCOUNTS[account_idx].capitalize()])
+
+
+func _on_signin_finished(ok: bool, message: String) -> void:
+	YouTube.signin_expired = false
+	var list := SignIn.available()
+	if not ok and list.size() > 1 and message != "Sign-in cancelled.":
+		_signin_choice += 1 # e.g. Google refused that browser: offer the next one
+		message += " Next time FrameTube will use %s." % list[_signin_choice % list.size()].name
+	_apply_account()
+	ui.set_status(message)
 
 
 func _apply_account() -> void:
-	YouTube.cookies_browser = ACCOUNTS[account_idx]
-	if YouTube.cookies_file() != "":
-		ui.set_account("cookies.txt")
+	if signin.active():
+		ui.set_account("Signing in... (Cancel)")
+	elif SignIn.signed_in():
+		ui.set_account("Signed in")
+	elif YouTube.cookies_file() != "":
+		ui.set_account("Using cookies.txt") # a hand-made cookies.txt next to the app
 	else:
-		ui.set_account(ACCOUNTS[account_idx].capitalize() if ACCOUNTS[account_idx] != "" else "Not signed in")
+		ui.set_account("Sign in")
+
+
+## yt-dlp said the saved sign-in no longer works (YouTube signed it out): drop it and say so.
+func _check_signin_expired() -> void:
+	if not YouTube.signin_expired:
+		return
+	YouTube.signin_expired = false
+	if SignIn.signed_in():
+		SignIn.sign_out()
+		_apply_account()
+		ui.set_status("Your YouTube sign-in expired. Open Settings and press Sign in to sign in again.")
 
 
 func _on_feed(key: String) -> void:

@@ -144,12 +144,21 @@ page takes over on first run while the helpers download (progress bar, "Try agai
   search (`-sexy -lingerie …`), and refuses videos YouTube marks 18+ even if a link is pasted. The status line
   says how many results it hid. It's a keyword filter, not a guarantee: YouTube's own Restricted Mode is tied to
   an account and isn't available to the app.
-- **YouTube account**: cycles Not signed in → Firefox → Chrome → Edge → Brave → Chromium. yt-dlp reads your YouTube login
-  cookies from that browser, so sign in to YouTube there first. Firefox is the reliable choice: Chrome and
-  Edge on Windows encrypt their cookies in a way yt-dlp often can't read. Alternatively, export a `cookies.txt`
-  (Netscape format) with a browser extension and put it next to the app or in `user://`. It overrides the
-  browser setting, and the button then shows "cookies.txt". Signing in also unlocks age-restricted and
-  members-only videos.
+- **YouTube account > Sign in**: opens a browser window with a fresh, private FrameTube profile at Google's
+  sign-in page. When the YouTube login appears, FrameTube copies it to `user://cookies.txt` (which yt-dlp
+  uses), closes the window and deletes the profile. Press the button again to cancel; once signed in, press it
+  twice to sign out. Signing in unlocks subscriptions, Watch later, age-restricted and members-only videos, and
+  stops most "sign in to confirm you're not a bot" errors.
+  - Why a throwaway profile: YouTube keeps replacing ("rotating") the login cookies of a browser that has
+    YouTube open, which breaks copies of them. This profile is never opened again, so the copy lasts much
+    longer than one read from your everyday browser. yt-dlp refreshes it as it's used.
+  - Firefox (preferred) is read with yt-dlp. Chrome, Edge, Brave and Chromium are read over the browser's
+    local DevTools connection, which sidesteps Chrome's cookie encryption. FrameTube never attaches to the
+    page. If Google refuses one browser, the next press uses the next one installed.
+  - On SteamOS it finds native installs and Flatpaks (Firefox from Discover). The window opens best from
+    Desktop Mode.
+  - When YouTube ends the session, FrameTube notices, removes it and asks you to sign in again.
+  - A hand-made `cookies.txt` (Netscape format) next to the app also works; the button then shows "Using cookies.txt".
 - Player row: **Video type** (auto-detected; cycle it if a video looks wrong), **Screen** size + **Reset**,
   **Quality** (HD / 2K / 4K / 5K / 8K maximum), **Swap eyes**.
 

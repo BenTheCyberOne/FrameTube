@@ -45,8 +45,9 @@ IF SOMETHING GOES WRONG
 - A video stutters: choose a lower "Quality" (4K is the sweet spot on the headset).
 - A video won't play: try again (FrameTube updates its YouTube helper by itself).
 - Videos never play: open Settings and press "Repair".
-- Age-restricted videos, your subscriptions, Watch later: open Settings > YouTube account.
-  Sign in to YouTube in Firefox in Desktop Mode first, then pick Firefox there.
+- Age-restricted videos, your subscriptions, Watch later: open Settings and press "Sign in".
+  A browser window opens; sign in to YouTube there and it closes by itself.
+  Do this in Desktop Mode, and install Firefox first if you don't have it (Discover store).
 - The 3D looks "inside out": turn on "Swap eyes".
 
 FORGOT THE PARENTAL PIN?

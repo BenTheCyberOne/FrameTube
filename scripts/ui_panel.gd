@@ -201,7 +201,7 @@ func _ready() -> void:
 	_setting_row("family", "Family-friendly filter",
 		"Hides videos with adult or gory words in them, and blocks 18+ videos")
 	_setting_row("account", "YouTube account",
-		"Sign in to YouTube in this browser on this computer first. Unlocks subscriptions & age-limited videos.")
+		"Opens a browser window to sign in. Unlocks subscriptions, Watch later & age-limited videos")
 	_setting_row("clear_history", "Watch history", "Remove everything from \"Continue watching\"")
 	_setting_row("pin", "Parental lock", "A 4-digit PIN is needed to turn off the filter, change the account or clear history")
 	_section("Room & look")

@@ -7,6 +7,8 @@ enum { FLAT, FLAT_SBS, SPHERE_360, SPHERE_360_TB, SPHERE_180, SPHERE_180_SBS, SP
 ## Signed-in access. A cookies.txt (Netscape format) in user:// or next to the app wins; otherwise,
 ## if set, yt-dlp reads the login cookies straight from this browser ("firefox", "chrome", "edge", ...).
 static var cookies_browser := ""
+## Set when yt-dlp reports that the saved sign-in stopped working (YouTube signed it out).
+static var signin_expired := false
 
 const FEEDS := {
 	"subscriptions": "https://www.youtube.com/feed/subscriptions",
@@ -48,7 +50,7 @@ static func feed(key: String, count := 30) -> Dictionary:
 	var r := list(FEEDS.get(key, key), count)
 	var empty: bool = r.has("error") or r.results.is_empty()
 	if empty and cookie_args().is_empty():
-		r.error = "This needs your YouTube account. Open Settings > YouTube account to sign in."
+		r.error = "This needs your YouTube account. Open Settings and press Sign in."
 	return r
 
 
@@ -213,9 +215,9 @@ static func friendly_error(raw: String) -> Dictionary:
 		["requested format|no video formats|unable to extract|signature|nsig",
 			"Couldn't load this video. YouTube may have changed something.", true],
 		["confirm your age|age-restricted|inappropriate for some users",
-			"This video is age-restricted. Sign in to YouTube (Settings > YouTube account) to watch it.", false],
+			"This video is age-restricted. Sign in to YouTube (Settings > Sign in) to watch it.", false],
 		["not a bot|sign in to confirm",
-			"YouTube wants a sign-in right now (this happens now and then). Try again in a few minutes, or set up your YouTube account in Settings to avoid it.", false],
+			"YouTube wants a sign-in right now (this happens now and then). Try again in a few minutes, or sign in to YouTube in Settings to avoid it.", false],
 		["private video", "This video is private.", false],
 		["members-only|join this channel|members only", "This video is for channel members only.", false],
 		["premieres in|will begin in|this live event will", "This video hasn't started yet. Try again later.", false],
@@ -223,7 +225,7 @@ static func friendly_error(raw: String) -> Dictionary:
 			"This video isn't available.", false],
 		["unable to download webpage|getaddrinfo|name or service|timed out|network is unreachable|connection",
 			"Can't reach YouTube. Check your internet connection and try again.", false],
-		["cookie", "Couldn't read your sign-in from that browser. Close the browser and try again, or pick another one in Settings.", false],
+		["cookie", "Your YouTube sign-in stopped working. Open Settings and sign in again.", false],
 	]
 	for r in rules:
 		if _matches(r[0], t):
@@ -297,7 +299,7 @@ static func guess_projection(info: Dictionary) -> int:
 
 
 static func _common_args() -> PackedStringArray:
-	var a := PackedStringArray(["--no-warnings", "--ignore-config"])
+	var a := PackedStringArray(["--ignore-config"]) # warnings go to stderr; only ERROR lines are shown
 	var deno := Bin.find_local("deno")
 	if deno != "":
 		a.append_array(["--js-runtimes", "deno:" + deno])
@@ -327,6 +329,8 @@ static func cookie_args() -> PackedStringArray:
 static func _run_json(args: PackedStringArray) -> Variant:
 	var res := Bin.run("yt-dlp", args)
 	var code: int = res.code
+	if res.err.contains("cookies are no longer valid"):
+		signin_expired = true
 	if code == -1:
 		return "Couldn't run yt-dlp. Put it in the bin folder or on PATH."
 	var data = JSON.parse_string(res.out.strip_edges())
