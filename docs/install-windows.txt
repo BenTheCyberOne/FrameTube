@@ -41,7 +41,8 @@ HOW TO USE IT (in VR)
 Tap a "Discover" topic to find something to watch without typing.
 Videos remember where you stopped: find them under "Continue watching".
 Want to watch without internet? Press "Download" on a search result or while a video plays;
-it shows up under "Downloads".
+it shows up under "Downloads"
+(press "Delete" there to remove it).
 
 Without a headset FrameTube opens in a normal window: click to use the menu,
 hold the right mouse button and move to look around, Tab shows/hides the menu.

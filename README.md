@@ -164,7 +164,9 @@ page takes over on first run while the helpers download (progress bar, "Try agai
   again to cancel. Saved videos appear under **Downloads** on Browse and play from the file, with no internet
   needed and instant seeking. They keep their video type, resume point and the family filter. Press **Saved**, then
   **Delete?** to remove one; Settings > Saved videos shows the count/size and opens the folder. Subtitle tracks are saved
-  alongside (`<video>.<lang>.json3`) and work offline. Live streams can't be saved. Downloading is for your own offline viewing: respect
+  alongside (`<video>.<lang>.json3`) and work offline; Settings > Subtitles to save picks which languages
+  (all, the video's own language, and/or specific ones; none at all is fine too). Cards in the Downloads list
+  have a **Delete** button (press it, then **Sure?**). Live streams can't be saved. Downloading is for your own offline viewing: respect
   creators' rights and YouTube's terms.
 - Player row: **Video type** (auto-detected; cycle it if a video looks wrong), **Screen** size + **Reset**,
   **Quality** (HD / 2K / 4K / 5K / 8K maximum), **Swap eyes**.

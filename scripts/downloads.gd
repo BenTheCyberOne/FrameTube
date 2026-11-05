@@ -15,6 +15,9 @@ const INDEX := "user://downloads.json"
 var items := {} # id -> {id, url, title, channel, views, duration, width, height, fps, vcodec, projection, age_limit, file, bytes, added}
 var queue: Array = [] # pending jobs: {id, url, height, info, projection}
 var current := {} # running job + {percent, phase, phases, cancelled}
+## Which subtitle languages to save with a video: "all", "orig" (the video's own language) and/or
+## language codes ("en", "es", ...). Empty = save none. Set from Settings by main.
+var save_langs: Array = ["all"]
 var _pid := -1
 var _thread: Thread
 
@@ -275,7 +278,7 @@ func _finished(job: Dictionary, path: String, error: String) -> void:
 			"file": path, "bytes": _file_size(path), "added": int(Time.get_unix_time_from_system()), "subs": []}
 		_save()
 		changed.emit()
-		var n := await _save_subs(id, info.get("subs", []))
+		var n := await _save_subs(id, pick_subs(info.get("subs", []), save_langs, str(info.get("language", ""))))
 		if not items.has(id): # deleted while the subtitles were saving
 			_next()
 			return
@@ -283,6 +286,14 @@ func _finished(job: Dictionary, path: String, error: String) -> void:
 			"" if n == 0 else ", %d subtitle track%s" % [n, "" if n == 1 else "s"]])
 	changed.emit()
 	_next()
+
+
+## The tracks to keep for the chosen languages.
+static func pick_subs(tracks: Array, langs: Array, video_lang: String) -> Array:
+	if langs.has("all"):
+		return tracks
+	var own := video_lang.get_slice("-", 0)
+	return tracks.filter(func(t): return langs.has(t.code) or (langs.has("orig") and own != "" and t.code == own))
 
 
 ## Saves the video's subtitle tracks (json3, as streamed) next to the file, so they work offline too.

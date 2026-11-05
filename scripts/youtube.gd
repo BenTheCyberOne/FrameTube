@@ -187,6 +187,7 @@ static func resolve(url: String, max_height: int) -> Dictionary:
 	var ch := _str(data, "channel")
 	return {
 		"subs": subtitle_tracks(data),
+		"language": _str(data, "language"),
 		"probe": probe_vr(_str(v, "url"), ua),
 		"id": _str(data, "id"),
 		"channel": ch if ch != "" else _str(data, "uploader"),

@@ -10,6 +10,10 @@ const SAVE_EVERY := 5.0
 const MENU_SIZES := [["Normal", 1.0], ["Large", 1.2], ["Extra large", 1.4]]
 const END_ACTIONS := ["Stop", "Replay", "Play next"]
 const SPEEDS := [1.0, 1.25, 1.5, 2.0, 0.5, 0.75]
+const SUB_SAVE_LANGS := [["all", "All languages"], ["orig", "The video's own language"], ["en", "English"],
+	["es", "Spanish"], ["fr", "French"], ["de", "German"], ["pt", "Portuguese"], ["it", "Italian"], ["nl", "Dutch"],
+	["pl", "Polish"], ["ru", "Russian"], ["tr", "Turkish"], ["ar", "Arabic"], ["hi", "Hindi"], ["ja", "Japanese"],
+	["ko", "Korean"], ["zh", "Chinese"]]
 const SUB_SIZES := [["Small", 0.8], ["Medium", 1.0], ["Large", 1.3]]
 const ACCENTS := [["Sky", Color(0.32, 0.66, 1.0)], ["Violet", Color(0.64, 0.5, 1.0)], ["Rose", Color(1.0, 0.4, 0.66)],
 	["Mint", Color(0.22, 0.87, 0.73)], ["Amber", Color(1.0, 0.71, 0.3)], ["Lime", Color(0.63, 0.9, 0.38)]]
@@ -45,6 +49,8 @@ var screen_hits := {} # controller -> ray hit on the video screen (or null)
 var signin: SignIn
 var downloads: Downloads
 var _delete_confirm_until := 0.0
+var _showing_downloads := false # the Browse list is "Downloads" (cards offer Delete)
+var _card_delete := {} # id -> time until which a second Delete press confirms
 var _preparing := {} # video ids being looked up before a Download from the results starts
 var _signin_choice := 0 # which browser the next sign-in uses (moves on after a failed try)
 var _signout_confirm_until := 0.0
@@ -123,7 +129,12 @@ func _ready() -> void:
 	ui.download_pressed.connect(_on_download_pressed)
 	ui.result_download.connect(_download_result)
 	ui.card_download_text = func(id: String) -> String:
-		return "Preparing..." if _preparing.has(id) else downloads.label(id)
+		if _preparing.has(id):
+			return "Preparing..."
+		if _showing_downloads and downloads.state(id) == "saved":
+			return "Sure?" if Time.get_ticks_msec() / 1000.0 < float(_card_delete.get(id, 0.0)) else "Delete"
+		return downloads.label(id)
+	ui.lang_toggled.connect(_toggle_save_lang)
 	_load_settings()
 	_set_projection(YouTube.FLAT)
 	ui.auto_keyboard = xr_mode # VR: on-screen keyboard pops up when you tap the search box
@@ -152,6 +163,30 @@ func _run_autotest() -> void:
 	if not opts.has("play"):
 		return
 	_autotest_running = not opts.has("welcome") # --welcome: keep the real startup list + menu auto-hide
+	if opts.has("langs-test"):
+		# --langs-test [--shots=dir]: the Settings language chips, toggling, and which tracks would be kept.
+		store.persist = false
+		panel.visible = true
+		_place_panel()
+		ui.show_page(true)
+		_on_setting("subs_save")
+		_toggle_save_lang("en")
+		_toggle_save_lang("orig")
+		print("[langs] picked=%s label=%s" % [downloads.save_langs, ui._setting_btns["subs_save"].text])
+		var tracks := [{"code": "en", "name": "English"}, {"code": "de", "name": "German"}, {"code": "ja", "name": "Japanese (auto)"}]
+		print("[langs] keep for a Japanese video: ", Downloads.pick_subs(tracks, downloads.save_langs, "ja").map(func(t): return t.name))
+		print("[langs] keep with All: ", Downloads.pick_subs(tracks, ["all"], "ja").size(), "  with none: ", Downloads.pick_subs(tracks, [], "ja").size())
+		await get_tree().create_timer(0.5).timeout
+		(ui.lang_box.get_parent().get_parent() as ScrollContainer).ensure_control_visible(ui.lang_box)
+		await get_tree().create_timer(0.5).timeout
+		if opts.has("shots"):
+			await RenderingServer.frame_post_draw
+			viewport.get_texture().get_image().save_png(str(opts.shots).path_join("langs.png"))
+		_toggle_save_lang("all")
+		print("[langs] after All: %s label=%s" % [downloads.save_langs, ui._setting_btns["subs_save"].text])
+		await get_tree().create_timer(0.5).timeout
+		get_tree().quit()
+		return
 	if opts.has("cards-test"):
 		# --cards-test [--shots=dir]: result cards with Download buttons; presses the first one (a real,
 		# tiny video), screenshots the progress, waits for it to save, then deletes it.
@@ -190,6 +225,8 @@ func _run_autotest() -> void:
 		var h := int(opts.get("dl-height", "360"))
 		store.persist = false
 		subs_pref = str(opts.get("subs-lang", subs_pref))
+		if opts.has("save-langs"): # e.g. --save-langs=de  (comma list; "none" = save no subtitles)
+			downloads.save_langs = [] if opts["save-langs"] == "none" else Array(str(opts["save-langs"]).split(","))
 		var info: Dictionary = await _await_async(func(): return YouTube.resolve(url, h))
 		if info.has("error"):
 			print("[dl] resolve error: ", info.error)
@@ -218,8 +255,16 @@ func _run_autotest() -> void:
 				subs_tracks[subs_idx].name if subs_idx >= 0 else "off", subs.cues.size(), subs.text_at(8.0).replace("
 ", " / ")])
 			current_url = url
-			_on_download_pressed()
-			_on_download_pressed() # press twice = delete
+			if opts.has("card-delete"): # delete from the Downloads list instead of the player
+				_on_feed("downloads")
+				print("[dl] downloads list: ", ui._card_dl.keys().map(func(k): return "%s=%s" % [k, ui._card_dl[k].text]))
+				_download_result(0)
+				print("[dl] first press: %s status=%s" % [ui._card_dl.values()[0].text, ui.status_label.text])
+				_download_result(0)
+				print("[dl] second press: cards=%d status=%s" % [ui._card_dl.size(), ui.status_label.text])
+			else:
+				_on_download_pressed()
+				_on_download_pressed() # press twice = delete
 			await get_tree().create_timer(2.0).timeout
 			print("[dl] after delete: saved=%s exists=%s leftover=%s" % [downloads.has(r[0]), FileAccess.file_exists(e.file),
 				Array(DirAccess.get_files_at(Downloads.folder())).filter(func(f): return f.contains(r[0]))])
@@ -1017,6 +1062,8 @@ func _load_settings() -> void:
 	haptics_on = bool(store.get_setting("haptics", true))
 	subs_pref = str(store.get_setting("subs_pref", ""))
 	subs_size_idx = clampi(int(store.get_setting("subs_size", 1)), 0, SUB_SIZES.size() - 1)
+	var langs = store.get_setting("subs_save", ["all"])
+	downloads.save_langs = langs if langs is Array else ["all"]
 	YouTube.family_filter = bool(store.get_setting("family", true)) # on by default
 	var vol := clampf(float(store.get_setting("volume", 1.0)), 0.0, 1.0)
 	ui.volume_slider.set_value_no_signal(vol)
@@ -1178,6 +1225,10 @@ func _on_setting(key: String) -> void:
 		"curve":
 			rig.set_curve((rig.curve_mode + 1) % ScreenRig.CURVES.size())
 			store.set_setting("screen_curve", rig.curve_mode)
+		"subs_save":
+			ui.lang_box.visible = not ui.lang_box.visible
+			if ui.lang_box.visible:
+				ui.set_lang_chips(SUB_SAVE_LANGS, downloads.save_langs)
 		"subs_size":
 			subs_size_idx = (subs_size_idx + 1) % SUB_SIZES.size()
 			store.set_setting("subs_size", subs_size_idx)
@@ -1263,6 +1314,7 @@ func _refresh_setting_labels() -> void:
 	ui.set_setting("curve", ScreenRig.CURVES[rig.curve_mode])
 	ui.set_setting("subs_size", SUB_SIZES[subs_size_idx][0])
 	ui.set_setting("pin", "On (change)" if _pin_set() else "Off (set a PIN)")
+	ui.set_setting("subs_save", _save_langs_label())
 	var n := downloads.items.size()
 	ui.set_setting("downloads", "None yet" if n == 0 else "%d video%s · %s" % [n, "" if n == 1 else "s",
 		Downloads.size_text(downloads.total_bytes())])
@@ -1347,6 +1399,7 @@ func _check_signin_expired() -> void:
 func _on_feed(key: String) -> void:
 	if key == "downloads":
 		search_results = downloads.list()
+		_showing_downloads = true
 		ui.show_results(search_results)
 		ui.set_status("Your saved videos play without internet." if not search_results.is_empty()
 			else "Nothing saved yet. While a video plays, press Download to keep it for offline watching.")
@@ -1357,6 +1410,7 @@ func _on_feed(key: String) -> void:
 			search_results.append({"id": h.id, "url": h.url, "title": h.title, "duration": h.get("duration", 0.0),
 				"channel": h.get("channel", ""), "views": int(h.get("views", 0)),
 				"resume": store.resume_position(h.url)})
+		_showing_downloads = false
 		ui.show_results(search_results)
 		ui.set_status("Pick up where you left off." if not search_results.is_empty() else "Nothing watched yet.")
 		return
@@ -1551,6 +1605,7 @@ func _on_search_done(r: Dictionary, id: int, done_message := "") -> void:
 		return
 	_updated_after_error = false
 	search_results = r.results
+	_showing_downloads = false
 	ui.show_results(search_results)
 	if search_results.is_empty():
 		ui.set_status("Nothing found. Try other words.")
@@ -1701,7 +1756,10 @@ func _download_result(i: int) -> void:
 	var id := Store.video_id(url)
 	match downloads.state(id):
 		"saved":
-			ui.set_status("Already saved. Tap the video to watch it, even without internet.")
+			if _showing_downloads:
+				_delete_from_list(id)
+			else:
+				ui.set_status("Already saved. Tap the video to watch it, even without internet.")
 			return
 		"downloading", "queued":
 			downloads.cancel(id)
@@ -1727,3 +1785,53 @@ func _on_result_resolved_for_download(info: Dictionary, url: String, id: String,
 		downloads.add(url, info, h, store.saved_projection(url))
 		ui.set_status("Saving \"%s\" in the background (press its button again to cancel)." % info.get("title", ""))
 	_refresh_download_ui()
+
+
+# --- Settings: subtitle languages kept with downloads ----------------------------------------------
+
+func _toggle_save_lang(code: String) -> void:
+	var l: Array = downloads.save_langs.duplicate()
+	if l.has(code):
+		l.erase(code)
+	elif code == "all":
+		l = ["all"] # "All" replaces the individual picks
+	else:
+		l.erase("all")
+		l.append(code)
+	downloads.save_langs = l
+	store.set_setting("subs_save", l)
+	ui.set_lang_chips(SUB_SAVE_LANGS, l)
+	ui.set_setting("subs_save", _save_langs_label())
+
+
+func _save_langs_label() -> String:
+	var l: Array = downloads.save_langs
+	if l.is_empty():
+		return "None"
+	if l.has("all"):
+		return "All languages"
+	var names := PackedStringArray()
+	for o in SUB_SAVE_LANGS:
+		if l.has(o[0]):
+			names.append("Own language" if o[0] == "orig" else o[1])
+	return names[0] if names.size() == 1 else "%s +%d" % [names[0], names.size() - 1]
+
+
+## The Delete button on a card in the Downloads list: press twice (the first press turns it into "Sure?").
+func _delete_from_list(id: String) -> void:
+	var now := Time.get_ticks_msec() / 1000.0
+	if now >= float(_card_delete.get(id, 0.0)):
+		_card_delete[id] = now + 4.0
+		ui.set_status("Press \"Sure?\" to delete \"%s\" from this device." % downloads.items[id].title)
+		ui.refresh_card_downloads()
+		get_tree().create_timer(4.1).timeout.connect(ui.refresh_card_downloads) # back to "Delete"
+		return
+	_card_delete.erase(id)
+	var title: String = downloads.items[id].title
+	if str(_last_info.get("video_url", "")) == str(downloads.items[id].file):
+		engine.stop() # it's playing right now: let go of the file first
+	downloads.remove(id)
+	search_results = downloads.list()
+	ui.show_results(search_results)
+	ui.set_status("Deleted \"%s\"." % title + ("" if not search_results.is_empty() else " Nothing saved any more."))
+	_refresh_setting_labels()

@@ -69,6 +69,8 @@ var settings_list: VBoxContainer
 var subs_btn: Button
 var speed_btn: Button
 var download_btn: Button
+var lang_box: HFlowContainer # Settings: which subtitle languages downloads keep
+signal lang_toggled(code: String)
 signal download_pressed
 signal subs_pressed
 signal speed_pressed
@@ -204,6 +206,12 @@ func _ready() -> void:
 	_setting_row("curve", "Screen shape", "Curve the screen around you, like a cinema")
 	_setting_row("subs_size", "Subtitle size", "How big subtitles are")
 	_setting_row("downloads", "Saved videos", "Videos you pressed Download on. Press to open their folder")
+	_setting_row("subs_save", "Subtitles to save", "Which subtitle languages are kept with downloaded videos")
+	lang_box = HFlowContainer.new()
+	lang_box.add_theme_constant_override("h_separation", 8)
+	lang_box.add_theme_constant_override("v_separation", 8)
+	lang_box.visible = false
+	settings_list.add_child(lang_box)
 	_section("Safety & account")
 	_setting_row("family", "Family-friendly filter",
 		"Hides videos with adult or gory words in them, and blocks 18+ videos")
@@ -764,6 +772,17 @@ func _make_card(it: Dictionary, index: int) -> PanelContainer:
 		layer.add_child(dl)
 		_card_dl[id] = dl
 	return card
+
+
+## options: [[code, name], ...]; selected: codes that are on.
+func set_lang_chips(options: Array, selected: Array) -> void:
+	for c in lang_box.get_children():
+		c.queue_free()
+	for o in options:
+		var on: bool = selected.has(o[0])
+		var b := _button(("✓ " if on else "") + o[1], lang_toggled.emit.bind(o[0]))
+		b.theme_type_variation = &"AccentButton" if on else &"ChipButton"
+		lang_box.add_child(b)
 
 
 ## Re-reads every visible card's Download label (progress, saved, ...).
