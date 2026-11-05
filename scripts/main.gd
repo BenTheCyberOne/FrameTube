@@ -3,7 +3,7 @@ extends Node3D
 ## otherwise in a desktop test mode (right-drag to look, click the panel).
 
 const PROJECTIONS := ["Normal", "3D side-by-side", "360°", "360° 3D", "180°", "180° 3D", "360° (YouTube cube)"]
-const QUALITIES := [1080, 1440, 2160, 2880, 4320]
+const QUALITIES := [0, 1080, 1440, 2160, 2880, 4320] # 0 = Auto
 const PANEL_PX := Vector2i(1500, 1050)
 const PANEL_M := Vector2(1.5, 1.05)
 const SAVE_EVERY := 5.0
@@ -43,7 +43,8 @@ var ui: UIPanel
 
 var store := Store.new()
 var projection := 0
-var quality_idx := 2
+var quality_idx := 0
+var _perf := {"t": 0.0, "frames": 0, "bad": 0.0, "warm": 4.0} # Auto: is playback keeping up?
 var rig: ScreenRig
 var screen_hits := {} # controller -> ray hit on the video screen (or null)
 var signin: SignIn
@@ -295,6 +296,8 @@ func _run_autotest() -> void:
 		signin.start_url = "https://www.youtube.com/"
 		signin.test_cookie = "VISITOR_INFO1_LIVE"
 		signin.out_path = OS.get_user_data_dir().path_join("signin-test-cookies.txt")
+		if opts.has("close-after"): # Chromium: "the user closes the window" after N seconds
+			signin.close_after = float(opts["close-after"])
 		var t0 := Time.get_ticks_msec()
 		signin.start(idx)
 		var r: Array = await signin.finished
@@ -367,7 +370,7 @@ func _run_autotest() -> void:
 	if opts.has("file"):
 		# Local file/image instead of YouTube: --play=x --file=<path> --size=WxH [--projection=N]
 		var wh := str(opts.get("size", "1920x1080")).split("x")
-		var info := {"title": opts.file.get_file(), "width": int(wh[0]), "height": int(wh[1]), "fps": 30.0,
+		var info := {"title": opts.file.get_file(), "width": int(wh[0]), "height": int(wh[1]), "fps": float(opts.get("fps", "30")),
 			"duration": float(opts.get("dur", "0")), "video_url": opts.file,
 			"audio_url": opts.file if opts.has("file-audio") else "", "vcodec": "file", "probe": {}}
 		if opts.has("speed"):
@@ -716,6 +719,7 @@ func _build_panel() -> void:
 
 func _process(delta: float) -> void:
 	_check_signin_expired()
+	_watch_performance(delta)
 	sphere.global_position = camera.global_position
 	if xr_mode:
 		_update_xr_pointers(delta)
@@ -1073,8 +1077,10 @@ func _on_swap_eyes(on: bool) -> void:
 
 func _cycle_quality() -> void:
 	quality_idx = (quality_idx + 1) % QUALITIES.size()
-	store.set_setting("quality_idx", quality_idx)
-	ui.set_quality(QUALITIES[quality_idx])
+	store.set_setting("quality", QUALITIES[quality_idx])
+	if QUALITIES[quality_idx] == YouTube.AUTO:
+		YouTube.auto_limit = YouTube.AUTO_VR_MAX # a fresh start for Auto
+	_update_quality_label()
 	if current_url != "" and engine.playing:
 		_play(current_url, engine.get_position(), true)
 
@@ -1082,7 +1088,7 @@ func _cycle_quality() -> void:
 # --- Settings, history & feeds ------------------------------------------------------------------
 
 func _load_settings() -> void:
-	quality_idx = clampi(int(store.get_setting("quality_idx", 2)), 0, QUALITIES.size() - 1)
+	quality_idx = maxi(QUALITIES.find(int(store.get_setting("quality", YouTube.AUTO))), 0)
 	ui.set_quality(QUALITIES[quality_idx])
 	ui.set_screen_size(rig.preset_label())
 	rig.changed.connect(_on_screen_changed)
@@ -1737,6 +1743,8 @@ func _on_resolved(r: Dictionary, id: int, url: String, start: float, keep_projec
 	store.touch(url, r.title, r.duration, r.get("channel", ""), int(r.get("views", 0)))
 	_refresh_setting_labels() # history count
 	_choose_subs(r.get("subs", []))
+	_perf = {"t": 0.0, "frames": engine.stat_uploaded, "bad": 0.0, "warm": 4.0} # ignore the first seconds
+	_update_quality_label()
 	ui.set_title("%s   (%dx%d %s%s)" % [r.title, r.width, r.height, r.vcodec.get_slice(".", 0),
 		", saved" if r.get("offline", false) else ""])
 	_refresh_download_ui()
@@ -1786,7 +1794,7 @@ func _on_download_pressed() -> void:
 			if _last_info.get("is_live", false):
 				ui.set_status("Live streams can't be saved.")
 				return
-			downloads.add(current_url, _last_info, QUALITIES[quality_idx], projection)
+			downloads.add(current_url, _last_info, _download_height(_last_info), projection)
 			ui.set_status("Saving this video for offline watching (press the button again to cancel). You can keep watching meanwhile.")
 	_refresh_download_ui()
 
@@ -1846,7 +1854,7 @@ func _on_result_resolved_for_download(info: Dictionary, url: String, id: String,
 	elif info.get("is_live", false):
 		ui.set_status("Live streams can't be saved.")
 	else:
-		downloads.add(url, info, h, store.saved_projection(url))
+		downloads.add(url, info, h if h != YouTube.AUTO else _download_height(info), store.saved_projection(url))
 		ui.set_status("Saving \"%s\" in the background (press its button again to cancel)." % info.get("title", ""))
 	_refresh_download_ui()
 
@@ -2021,3 +2029,59 @@ func _rig_test(shots: String) -> void:
 	XRServer.remove_tracker(ht)
 	await get_tree().create_timer(0.5).timeout
 	get_tree().quit()
+
+
+# --- Auto quality -----------------------------------------------------------------------------------
+
+func _update_quality_label() -> void:
+	var playing := 0
+	if engine and engine.playing and engine.width > 0:
+		playing = mini(engine.width, engine.height)
+	ui.set_quality(QUALITIES[quality_idx], playing)
+
+
+## Saving with Auto: the stream Auto picked (what plays well here), or 4K if nothing is known.
+func _download_height(info: Dictionary) -> int:
+	if QUALITIES[quality_idx] != YouTube.AUTO:
+		return QUALITIES[quality_idx]
+	var w := int(info.get("width", 0))
+	var h := int(info.get("height", 0))
+	return mini(w, h) if w > 0 and h > 0 else 2160
+
+
+## Auto: if frames keep arriving too slowly to show the video smoothly (the PC can't decode it fast
+## enough, or the connection can't bring it in), drop one step and carry on from the same spot.
+func _watch_performance(delta: float) -> void:
+	var active: bool = QUALITIES[quality_idx] == YouTube.AUTO and engine.playing and not engine.paused \
+			and not engine.buffering and current_url != "" and not bool(_last_info.get("offline", false)) \
+			and engine.fps > 1.0
+	if not active or float(_perf.warm) > 0.0: # stalls, pauses, seeks and the first seconds don't count
+		if active:
+			_perf.warm = float(_perf.warm) - delta
+		_perf.t = 0.0
+		_perf.frames = engine.stat_uploaded
+		return
+	_perf.t = float(_perf.t) + delta
+	if float(_perf.t) < 1.0:
+		return
+	var shown: int = engine.stat_uploaded - int(_perf.frames)
+	var ratio: float = shown / (engine.fps * float(_perf.t))
+	_perf.frames = engine.stat_uploaded
+	_perf.t = 0.0
+	_perf.bad = _perf.bad + 1.0 if ratio < 0.9 else maxf(_perf.bad - 1.0, 0.0)
+	if _perf.bad < 5.0:
+		return
+	var res := mini(engine.width, engine.height)
+	var steps := [2880, 2160, 1440, 1080]
+	var next := 0
+	for st in steps:
+		if st < res - 100:
+			next = st
+			break
+	if next == 0:
+		return
+	YouTube.auto_limit = next
+	_perf = {"t": 0.0, "frames": engine.stat_uploaded, "bad": 0.0, "warm": 6.0}
+	ui.set_status("This video was too much to play smoothly at %s, so FrameTube switched to %s." %
+		[UIPanel.quality_name(res), UIPanel.quality_name(next)])
+	_play(current_url, engine.get_position(), true)

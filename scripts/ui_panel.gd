@@ -29,7 +29,7 @@ const KEY_ROWS := ["1234567890-", "qwertyuiop=", "asdfghjkl:/", "zxcvbnm.?&_"]
 const DISCOVER := [["VR180 3D", "vr180 3d travel experience"], ["360 nature", "360 video nature 8k"],
 	["Roller coasters", "360 roller coaster pov"], ["Space", "360 vr space earth"],
 	["Underwater", "360 underwater vr"], ["Concerts", "vr180 concert live"], ["Relax", "4k relaxing scenery"]]
-const QUALITY_NAMES := {1080: "HD", 1440: "2K", 2160: "4K", 2880: "5K", 4320: "8K"}
+const QUALITY_NAMES := {0: "Auto", 1080: "HD", 1440: "2K", 2160: "4K", 2880: "5.7K", 4320: "8K"}
 
 var auto_keyboard := false # VR: show the on-screen keyboard whenever the search box is focused
 const BG := Color(0.055, 0.06, 0.085, 0.975) # near-opaque: bright grids (Synthwave) shouldn't show through
@@ -613,8 +613,22 @@ func set_projection_name(text: String) -> void:
 	proj_btn.text = "Type: " + text
 
 
-func set_quality(height: int) -> void:
-	quality_btn.text = "Quality: " + QUALITY_NAMES.get(height, "%dp" % height)
+## height 0 = Auto; `playing` (smaller side of the current video, 0 = none) is shown next to "Auto".
+func set_quality(height: int, playing := 0) -> void:
+	var t: String = QUALITY_NAMES.get(height, "%dp" % height)
+	if height == 0 and playing > 0:
+		t += " (%s)" % quality_name(playing)
+	quality_btn.text = "Quality: " + t
+
+
+## 3840 -> "8K", 1920 -> "4K", ... (by the video's smaller side, as yt-dlp's "res" counts it).
+static func quality_name(res: int) -> String:
+	if res >= 3600: return "8K"
+	if res >= 2560: return "5.7K"
+	if res >= 1800: return "4K"
+	if res >= 1300: return "2K"
+	if res >= 1000: return "HD"
+	return "%dp" % res
 
 
 func set_decoder(label: String) -> void:

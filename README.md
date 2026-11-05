@@ -165,14 +165,17 @@ page takes over on first run while the helpers download (progress bar, "Try agai
   - Why a throwaway profile: YouTube keeps replacing ("rotating") the login cookies of a browser that has
     YouTube open, which breaks copies of them. This profile is never opened again, so the copy lasts much
     longer than one read from your everyday browser. yt-dlp refreshes it as it's used.
-  - Firefox (preferred) is read with yt-dlp. Chrome, Edge, Brave and Chromium are read over the browser's
-    local DevTools connection, which sidesteps Chrome's cookie encryption. FrameTube never attaches to the
-    page. If Google refuses one browser, the next press uses the next one installed.
+  - Firefox (preferred) is read with yt-dlp. Chrome, Edge, Brave and Chromium take two steps, because Google
+    refuses sign-in ("this browser may not be secure") in a browser started with remote debugging. First an
+    ordinary window with nothing attached: sign in, then close it (on Linux it closes by itself once the login
+    shows up in the profile's cookie file; Windows locks that file). Then FrameTube reopens the profile
+    invisibly with its local DevTools connection, which hands over the cookies already decrypted, and
+    closes it. If one browser fails, the next press uses the next one installed.
   - On SteamOS it finds native installs and Flatpaks (Firefox from Discover). The window opens best from
     Desktop Mode.
   - When YouTube ends the session, FrameTube notices, removes it and asks you to sign in again.
   - A hand-made `cookies.txt` (Netscape format) next to the app also works; the button then shows "Using cookies.txt".
-- **Download** (player controls, or the button on any search result; only when you press it): saves the video at the current quality to
+- **Download** (player controls, or the button on any search result; only when you press it): saves the video at the current quality (with Auto: the stream that's playing) to
   `Videos/FrameTube` (Windows: your Videos folder; SteamOS: `~/Videos/FrameTube`), with live progress; press
   again to cancel. Saved videos appear under **Downloads** on Browse and play from the file, with no internet
   needed and instant seeking. They keep their video type, resume point and the family filter. Press **Saved**, then
@@ -182,7 +185,13 @@ page takes over on first run while the helpers download (progress bar, "Try agai
   have a **Delete** button (press it, then **Sure?**). Live streams can't be saved. Downloading is for your own offline viewing: respect
   creators' rights and YouTube's terms.
 - Player row: **Video type** (auto-detected; cycle it if a video looks wrong), **Screen** size + **Reset**,
-  **Quality** (HD / 2K / 4K / 5K / 8K maximum), **Swap eyes**.
+  **Quality** (Auto / HD / 2K / 4K / 5.7K / 8K maximum), **Swap eyes**.
+  - **Auto** (the default) shows what it picked, e.g. "Auto (8K)". 360°/180° videos spread their pixels all
+    around you, so they need far more than a flat screen: 4K over 360° is only about 10 pixels per degree,
+    half of what the headset shows, which is why 4K 360 looks soft. Auto takes VR videos up to 8K (5.7K when
+    they're over 30 fps) and flat videos up to 4K. On the Frame by itself (ARM) it stays at 4K. If frames keep
+    arriving too slowly (under 90% of the frame rate for about 5 s), it steps down one level from the same spot
+    and stays there until you pick a quality or restart.
 
 ## Environments, lighting and the toy
 
@@ -256,9 +265,12 @@ audio is ahead). It also saves screenshots and doesn't touch your real settings 
   and steps down automatically if one fails. Frames come out as NV12, the GPU's native format, so ffmpeg doesn't
   need to convert them on the CPU. On an RTX 5070 this used about 5× less CPU for 4K VP9 and 9× less for 8K AV1.
   On the Frame it likely falls back to the CPU unless the driver supports Vulkan video decoding.
-- **Above 4K, the bottleneck is copying frames into Godot.** Godot's pipe reads top out around 47 fps at 4K
-  (~580 MB/s), which works out to about 12 fps at 8K. Real 8K needs a GDExtension that hands decoded frames
-  straight to the GPU texture (libmpv or FFmpeg).
+- **Above 4K, the bottleneck is copying frames into Godot.** The pipe itself does ~2.5 GB/s; the cost was
+  assembling each frame from 64 KB reads. Growing a PackedByteArray with `append_array` managed ~17 fps at
+  8K; copying the pieces into a buffer allocated once at full size (StreamPeerBuffer) holds a steady 30 fps
+  at 8K (tested with HEVC and AV1 files and a real 8K AV1 360 stream, RTX 5070). 8K60 still tops out at
+  ~30 fps and 5.7K60 at ~53, so Auto uses 5.7K or 4K for high-frame-rate VR. Beyond that needs a GDExtension
+  that hands decoded frames straight to the GPU texture (libmpv or FFmpeg).
 - **Not yet supported:** 3D (stereo) cubemap 360°, and VR180 that uses YouTube's mesh projection without
   side-by-side stereo metadata. Neither turned up in testing. Some videos only offer the 8K AV1 version above
   1764p; YouTube's sub-4K VR180 versions (2204×1240, 3136×1764) look like a different layout and haven't been

@@ -12,10 +12,13 @@ extends Node
 ## one read out of the user's everyday browser. yt-dlp refreshes the copy itself as it's used.
 ##
 ## Firefox:  the cookies are read from the profile with yt-dlp (Firefox stores them unencrypted).
-## Chromium: (Chrome, Edge, Brave, Chromium) the cookies are read live over the browser's local
-##           DevTools connection, which sidesteps Chrome's cookie encryption, then the browser is
-##           told to close. FrameTube never attaches to the page itself, so the sign-in page sees
-##           an ordinary browser.
+## Chromium: (Chrome, Edge, Brave, Chromium) two steps. 1) A completely ordinary window for signing in.
+##           (Google refuses sign-in in a browser started with remote debugging on, calling it "not
+##           secure", so nothing is attached to it.) It's done when the window is closed, or, on Linux,
+##           as soon as the login shows up in the profile's cookie file (Windows locks that file).
+##           2) The same profile is reopened invisibly with its local DevTools connection, which hands
+##           over the cookies already decrypted (Chrome's cookie encryption can't be read from outside),
+##           then it's closed. No web page is loaded in step 2.
 
 signal progress(text: String)
 signal finished(ok: bool, message: String)
@@ -34,7 +37,7 @@ var out_path := ""
 var test_cookie := ""
 
 var browser := {}
-var _state := "idle" # idle | waiting | closing
+var _state := "idle" # idle | waiting | exporting (Chromium step 2) | closing
 var _pid := -1
 var _profile := ""
 var _t := 0.0
@@ -47,6 +50,9 @@ var _thread: Thread
 var _busy := false
 var _result_ok := false
 var _result_msg := ""
+var close_after := -1.0 # test hook: "the user closes the window" after this many seconds
+var _export_t := 0.0
+var _export_launched := false
 
 
 func active() -> bool:
@@ -137,9 +143,7 @@ func start(choice := 0) -> void:
 			args.append("--headless")
 		args.append_array(["--new-window", start_url])
 	else:
-		args.append_array(["--user-data-dir=" + _profile, "--remote-debugging-port=0",
-			"--no-first-run", "--no-default-browser-check", "--disable-sync", "--password-store=basic",
-			"--new-window"])
+		args.append_array(_chromium_args(false))
 		if headless:
 			args.append("--headless=new")
 		args.append(start_url)
@@ -152,8 +156,23 @@ func start(choice := 0) -> void:
 	_poll_t = 3.0 # give the browser a moment to start
 	_ws = null
 	_ws_url = ""
-	progress.emit("A %s window opened on the %s. Sign in to YouTube there; it closes by itself when you're done." %
-		[browser.name, "computer screen" if OS.get_name() == "Windows" else "screen"])
+	var where := "computer screen" if OS.get_name() == "Windows" else "screen"
+	if browser.kind == "chromium" and OS.get_name() == "Windows":
+		progress.emit("A %s window opened on the %s. Sign in to YouTube there, then close that window." % [browser.name, where])
+	else:
+		progress.emit("A %s window opened on the %s. Sign in to YouTube there; it closes by itself when you're done." % [browser.name, where])
+
+
+func _chromium_args(debug: bool) -> PackedStringArray:
+	var a := PackedStringArray(["--user-data-dir=" + _profile, "--no-first-run", "--no-default-browser-check",
+		"--disable-sync"])
+	if OS.get_name() != "Windows":
+		a.append("--password-store=basic") # no keyring prompt on SteamOS
+	if debug:
+		a.append_array(["--remote-debugging-port=0", "--headless=new"])
+	else:
+		a.append("--new-window")
+	return a
 
 
 func cancel() -> void:
@@ -168,21 +187,52 @@ func _process(delta: float) -> void:
 	if _ws != null:
 		_pump_ws()
 	if _state == "closing":
-		# Let the browser shut down on its own (it writes its files), then make sure it's gone.
+		# Let the browser shut down on its own, then make sure it's gone.
 		_close_t -= delta
 		if _close_t <= 0.0 or not OS.is_process_running(_pid):
 			_kill_and_clean()
 			_state = "idle"
 			finished.emit(_result_ok, _result_msg)
 		return
+	if _state == "exporting":
+		_export_t += delta
+		if _export_t > 25.0:
+			_finish(false, "Couldn't read the sign-in from %s. Try again, or sign in with Firefox." % browser.name)
+			return
+		if not _export_launched:
+			if _pid > 0 and OS.is_process_running(_pid):
+				if _export_t > 8.0:
+					OS.kill(_pid) # still hanging around in the background
+				return # the sign-in window is still shutting down
+			_export_launched = true
+			var args := PackedStringArray(browser.pre)
+			args.append_array(_chromium_args(true))
+			args.append("about:blank")
+			DirAccess.remove_absolute(_profile.path_join("DevToolsActivePort"))
+			_pid = OS.create_process(browser.cmd, args)
+			_poll_t = 1.0
+			if _pid <= 0:
+				_finish(false, "Couldn't read the sign-in from %s. Try again, or sign in with Firefox." % browser.name)
+			return
+		_poll_t -= delta
+		if _poll_t <= 0.0:
+			_poll_t = 1.0
+			_poll_chromium()
+		return
 	if _t > TIMEOUT:
 		_finish(false, "Sign-in took too long, so FrameTube closed the window. Try again when you're ready.")
 		return
+	if close_after > 0.0 and _t > close_after:
+		close_after = -1.0
+		_close_gently(_pid)
+		if browser.kind != "firefox":
+			_start_export()
+			return
 	if not OS.is_process_running(_pid):
 		if browser.kind == "firefox" and not _busy:
 			_export_firefox(true) # one last look: maybe they signed in and closed it themselves
 		elif browser.kind != "firefox":
-			_finish(false, "The sign-in window was closed before you finished signing in.")
+			_start_export() # window closed: go and read what's in the profile
 		return
 	_poll_t -= delta
 	if _poll_t > 0.0:
@@ -191,8 +241,10 @@ func _process(delta: float) -> void:
 	if browser.kind == "firefox":
 		if not _busy:
 			_export_firefox(false)
-	else:
-		_poll_chromium()
+	elif _cookie_file_has_login():
+		progress.emit("Signed in. Finishing up...")
+		_close_gently(_pid)
+		_start_export()
 
 
 # --- Firefox ------------------------------------------------------------------------------------
@@ -242,6 +294,41 @@ func _on_firefox_export(cookies: Array, final: bool) -> void:
 
 # --- Chrome / Edge / Brave / Chromium ------------------------------------------------------------
 
+## Step 2: wait for the sign-in window to be gone, then reopen the profile invisibly and ask it.
+func _start_export() -> void:
+	_state = "exporting"
+	_export_t = 0.0
+	_export_launched = false
+
+
+## Linux: the login cookie's name is stored in plain text in the profile's cookie database.
+## (Windows keeps the file locked while the browser runs, so there it's "close the window".)
+func _cookie_file_has_login() -> bool:
+	var name := test_cookie if test_cookie != "" else LOGIN_COOKIE
+	var needle := name.to_utf8_buffer().hex_encode()
+	for rel in ["Default/Network/Cookies", "Default/Cookies"]:
+		var f := FileAccess.open(_profile.path_join(rel), FileAccess.READ)
+		if f == null:
+			continue
+		var hex := f.get_buffer(f.get_length()).hex_encode()
+		var i := hex.find(needle)
+		while i >= 0:
+			if i % 2 == 0:
+				return true
+			i = hex.find(needle, i + 1)
+	return false
+
+
+## Ask the browser to close (it saves its cookies on the way out), rather than killing it.
+static func _close_gently(pid: int) -> void:
+	if pid <= 0 or not OS.is_process_running(pid):
+		return
+	if OS.get_name() == "Windows":
+		OS.execute("taskkill", ["/PID", str(pid), "/T"])
+	else:
+		OS.execute("kill", ["-TERM", str(pid)])
+
+
 func _poll_chromium() -> void:
 	if _ws == null:
 		# The browser writes its DevTools port here once it's listening (we asked for a free port).
@@ -272,7 +359,7 @@ func _pump_ws() -> void:
 	_ws.poll()
 	while _ws.get_available_packet_count() > 0:
 		var msg = JSON.parse_string(_ws.get_packet().get_string_from_utf8())
-		if not (msg is Dictionary) or _state != "waiting":
+		if not (msg is Dictionary) or _state != "exporting":
 			continue
 		var result = msg.get("result")
 		if not (result is Dictionary) or not result.has("cookies"):
@@ -286,6 +373,8 @@ func _pump_ws() -> void:
 				"expires": exp, "name": str(c.name), "value": str(c.value), "http_only": bool(c.get("httpOnly", false))})
 		if _has_login(cookies, test_cookie):
 			_save(cookies)
+		elif _state == "waiting" or _state == "exporting":
+			_finish(false, "The sign-in window was closed before you finished signing in.")
 
 
 # --- Shared ---------------------------------------------------------------------------------------

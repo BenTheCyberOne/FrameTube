@@ -50,7 +50,7 @@ it shows up under "Downloads"
 
 IF SOMETHING GOES WRONG
 -----------------------
-- A video stutters: choose a lower "Quality" (4K is the sweet spot on the headset).
+- A video stutters: choose a lower "Quality" (4K is the sweet spot on the headset; Auto does this for you).
 - A video won't play: try again (FrameTube updates its YouTube helper by itself).
 - Videos never play: open Settings and press "Repair".
 - Age-restricted videos, your subscriptions, Watch later: open Settings and press "Sign in".

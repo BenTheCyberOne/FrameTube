@@ -148,9 +148,31 @@ static func title_badges(title: String, live := false) -> PackedStringArray:
 	return b
 
 
+## Auto quality: the sharpest stream this machine plays smoothly. 360/180 videos spread their pixels
+## around you, so they need far more of them than a flat screen does: 4K over 360 degrees is only about
+## 10 pixels per degree, half of what the headset shows. So: VR videos up to 8K (5.7K when it's over
+## 30 fps), flat ones up to 4K. `auto_limit` lowers the ceiling after playback couldn't keep up.
+const AUTO := 0
+const AUTO_VR_MAX := 4320
+const AUTO_VR_HIGH_FPS_MAX := 2880
+const AUTO_FLAT_MAX := 2160
+static var auto_limit := 4320
+
+
+static func auto_caps() -> Vector2i: # x = VR videos, y = flat videos
+	var vr := AUTO_VR_MAX
+	if Engine.get_architecture_name().begins_with("arm"):
+		vr = 2160 # the Frame by itself, without a PC: decoding is all on its CPU
+	vr = mini(vr, auto_limit)
+	return Vector2i(vr, mini(AUTO_FLAT_MAX, vr))
+
+
 ## Picks the best video stream up to max_height (preferring VP9, which ffmpeg decodes fast)
-## plus the best audio stream, and returns their direct URLs.
+## plus the best audio stream, and returns their direct URLs. max_height = AUTO: see auto_caps().
 static func resolve(url: String, max_height: int) -> Dictionary:
+	var auto := max_height == AUTO
+	if auto:
+		max_height = auto_caps().x
 	var args := _common_args()
 	args.append_array(["--no-playlist", "-J", "-f", "bv*+ba/b", "-S", "res:%d,vcodec:vp9" % max_height, url])
 	var data = _run_json(args)
@@ -185,10 +207,24 @@ static func resolve(url: String, max_height: int) -> Dictionary:
 	var live = data.get("is_live")
 	var ua: String = str(headers.get("User-Agent", "")) if headers is Dictionary else ""
 	var ch := _str(data, "channel")
+	var probe := probe_vr(_str(v, "url"), ua)
+	if auto and req is Array:
+		# Now that we know what kind of video it is, maybe step down (same format list, no new request).
+		var caps := auto_caps()
+		var vr := guess_projection({"probe": probe, "title": _str(data, "title")}) != FLAT
+		var cap := caps.x if vr else caps.y
+		if vr and _num(v, "fps") > 31.0:
+			cap = mini(cap, AUTO_VR_HIGH_FPS_MAX)
+		if mini(w, h) > cap:
+			var alt := _best_video_under(data.get("formats", []), cap)
+			if not alt.is_empty():
+				v = alt
+				w = int(_num(v, "width"))
+				h = int(_num(v, "height"))
 	return {
 		"subs": subtitle_tracks(data),
 		"language": _str(data, "language"),
-		"probe": probe_vr(_str(v, "url"), ua),
+		"probe": probe,
 		"id": _str(data, "id"),
 		"channel": ch if ch != "" else _str(data, "uploader"),
 		"views": int(_num(data, "view_count")),
@@ -203,6 +239,22 @@ static func resolve(url: String, max_height: int) -> Dictionary:
 		"vcodec": _str(v, "vcodec"),
 		"user_agent": ua,
 	}
+
+
+## yt-dlp lists formats sorted worst to best by our -S order (resolution first, then VP9), so the
+## last video-only one that fits is the best one under the cap.
+static func _best_video_under(formats: Variant, cap: int) -> Dictionary:
+	if not (formats is Array):
+		return {}
+	for i in range(formats.size() - 1, -1, -1):
+		var f = formats[i]
+		if not (f is Dictionary) or _str(f, "vcodec", "none") == "none" or _str(f, "acodec", "none") != "none":
+			continue
+		var fw := int(_num(f, "width"))
+		var fh := int(_num(f, "height"))
+		if fw > 0 and fh > 0 and mini(fw, fh) <= cap and _str(f, "url") != "" and _str(f, "protocol", "https").begins_with("http"):
+			return f
+	return {}
 
 
 ## Turns yt-dlp's technical errors into something a non-technical person can act on.
