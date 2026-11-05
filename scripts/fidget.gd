@@ -1,18 +1,23 @@
 class_name FidgetToy
 extends Node3D
 ## A little floating toy next to you. Grab it (grip) and throw it, or poke/swipe it with your hand to spin it.
-## When let go it drifts back to its spot on a soft spring. Desktop: click it.
+## When let go it drifts back to its spot on a soft spring, stays where you leave it, or falls to the floor
+## (see MODES). Recenter calls it back. Desktop: click it.
 ## Simple hand-rolled physics (no physics engine): velocity + spring home + damping + floor bounce.
 
 signal touched(strength: float) # for haptics
 
 const SHAPES := ["Orb", "Cube", "Spinner", "Donut", "Off"]
+const MODES := ["Floats back", "Stays put", "Falls"] # what it does when you let go
+const GRAVITY := 9.8
 const RADIUS := 0.07 # grab / hit radius (m)
 const SPRING := 4.0 # pull back home
 const DAMPING := 2.0 # linear damping (with SPRING: a playful, slightly bouncy return)
 const SPIN_DAMPING := 0.3 # spins keep going for a while — that's the fun part
 
 var shape := 0
+var mode := 0
+var _returning := false # Recenter in "Stays put" / "Falls": fly home once, then stay
 var home := Vector3(0.75, 1.2, -0.75)
 var vel := Vector3.ZERO
 var ang := Vector3.ZERO # angular velocity (world axis * rad/s)
@@ -118,12 +123,20 @@ func set_accent(c: Color) -> void:
 	_spark_mat.albedo_color = Color(c.r * 2.0, c.g * 2.0, c.b * 2.0) # >1: blooms
 
 
-## Move the toy's resting spot (on recenter). Snaps there the first time.
+## Move the toy's resting spot (on recenter). Snaps there the first time; if it doesn't float back by
+## itself, it flies back now (so a toy thrown across the room or dropped on the floor is never lost).
 func set_home(p: Vector3) -> void:
 	home = p
 	if not _placed:
 		global_position = p
 		_placed = true
+	elif mode != 0 and grabbed_by == null:
+		_returning = true
+
+
+func set_mode(m: int) -> void:
+	mode = clampi(m, 0, MODES.size() - 1)
+	_returning = false
 
 
 func _process(delta: float) -> void:
@@ -140,14 +153,31 @@ func _process(delta: float) -> void:
 		_hand_prev_pos = hp
 		_hand_prev_basis = grabbed_by.global_basis
 	else:
-		vel += (home - global_position) * SPRING * delta
-		vel *= exp(-DAMPING * delta)
+		var on_floor := global_position.y <= RADIUS + 0.002
+		if mode == 0 or _returning:
+			vel += (home - global_position) * SPRING * (2.0 if _returning else 1.0) * delta
+			vel *= exp(-DAMPING * delta)
+			if _returning and global_position.distance_to(home) < 0.03 and vel.length() < 0.1:
+				_returning = false
+		elif mode == 1: # floats in place, coasting to a stop
+			vel *= exp(-1.5 * delta)
+		else: # falls, bounces, rolls to a stop
+			vel.y -= GRAVITY * delta
+			vel *= exp(-0.15 * delta)
+			if on_floor:
+				vel.x *= exp(-2.5 * delta) # floor friction
+				vel.z *= exp(-2.5 * delta)
+				ang *= exp(-2.0 * delta)
 		global_position += vel * delta
 		if global_position.y < RADIUS: # bounce off the floor
 			global_position.y = RADIUS
-			vel.y = absf(vel.y) * 0.6
+			vel.y = absf(vel.y) * (0.6 if mode != 2 else 0.45)
+			if mode == 2 and vel.y < 0.25:
+				vel.y = 0.0 # settled: rest on the floor instead of buzzing
 		ang *= exp(-SPIN_DAMPING * delta)
 		var idle := Vector3(0.0, 0.25, 0.0) # always a lazy turn, so it looks alive
+		if mode == 2 and not _returning:
+			idle = Vector3.ZERO
 		var w := ang + idle
 		if w.length() > 1e-4:
 			global_basis = (Basis(w.normalized(), w.length() * delta) * global_basis).orthonormalized()
@@ -161,6 +191,7 @@ func try_grab(hand: Node3D) -> bool:
 	if hand.global_position.distance_to(global_position) > RADIUS + 0.08:
 		return false
 	grabbed_by = hand
+	_returning = false
 	_grab_offset = hand.global_transform.affine_inverse() * global_transform
 	_hand_prev_pos = hand.global_position
 	_hand_prev_basis = hand.global_basis

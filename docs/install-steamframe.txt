@@ -34,7 +34,12 @@ HOW TO USE IT
   Thumbstick left / right ........... skip back / forward 10 seconds
   GRIP while pointing at the screen . grab and move the screen
   GRIP with both hands .............. pull apart to make the screen bigger
+  GRIP while pointing at the menu ... move the menu (both hands: make it bigger / smaller)
   Thumbstick click .................. re-center everything in front of you
+                                      (also calls the fidget toy back)
+
+Settings has options to show your hands and controllers, and to make the fidget toy
+stay where you leave it (or fall to the floor) instead of floating back.
 
 Tap a "Discover" topic to find something to watch without typing.
 Videos remember where you stopped: find them under "Continue watching".

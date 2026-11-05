@@ -7,7 +7,7 @@ const QUALITIES := [1080, 1440, 2160, 2880, 4320]
 const PANEL_PX := Vector2i(1500, 1050)
 const PANEL_M := Vector2(1.5, 1.05)
 const SAVE_EVERY := 5.0
-const MENU_SIZES := [["Normal", 1.0], ["Large", 1.2], ["Extra large", 1.4]]
+const MENU_SIZES := [["Small", 0.7], ["Normal", 1.0], ["Large", 1.2], ["Extra large", 1.4]]
 const END_ACTIONS := ["Stop", "Replay", "Play next"]
 const SPEEDS := [1.0, 1.25, 1.5, 2.0, 0.5, 0.75]
 const SUB_SAVE_LANGS := [["all", "All languages"], ["orig", "The video's own language"], ["en", "English"],
@@ -61,7 +61,9 @@ var setup: ToolSetup
 var resume_on := true
 var end_action := 0
 var autohide_on := true
-var menu_size_idx := 0
+var prig: PanelRig # menu placement / size
+var hand_vis: Array[HandVisuals] = []
+var hands_on := true
 var haptics_on := true
 var _clear_confirm_until := 0.0
 var subs: Subtitles
@@ -102,6 +104,11 @@ func _ready() -> void:
 	_build_video_surfaces()
 	_build_environment()
 	_build_panel()
+	prig = PanelRig.new()
+	add_child(prig)
+	var legacy_menu := clampi(int(store.get_setting("menu_size", 0)), 0, 2) # older builds: Normal / Large / XL
+	prig.setup(panel, camera, store, PANEL_M, [1.0, 1.2, 1.4][legacy_menu])
+	prig.changed.connect(ui.set_status)
 	toy = FidgetToy.new()
 	add_child(toy)
 	toy.touched.connect(_on_toy_touched)
@@ -163,6 +170,11 @@ func _run_autotest() -> void:
 	if not opts.has("play"):
 		return
 	_autotest_running = not opts.has("welcome") # --welcome: keep the real startup list + menu auto-hide
+	if opts.has("rig-test"):
+		# --rig-test [--shots=dir]: move / resize the menu, the toy's let-go modes, a simulated tracked hand.
+		store.persist = false
+		_rig_test.call_deferred(str(opts.get("shots", "")))
+		return
 	if opts.has("langs-test"):
 		# --langs-test [--shots=dir]: the Settings language chips, toggling, and which tracks would be kept.
 		store.persist = false
@@ -559,6 +571,14 @@ func _build_rig() -> void:
 			lasers[c] = laser
 			hits[c] = null
 			flicked[c] = false
+			var g := XRController3D.new() # the grip pose: where the controller sits in your hand
+			g.tracker = tracker
+			g.pose = &"grip"
+			origin.add_child(g)
+			var hv := HandVisuals.new()
+			origin.add_child(hv)
+			hv.setup("left" if tracker == "left_hand" else "right", g)
+			hand_vis.append(hv)
 		active_hand = hands[1]
 	else:
 		camera = Camera3D.new()
@@ -721,19 +741,23 @@ func _update_xr_pointers(delta: float) -> void:
 		screen_hits[c] = sh
 		# Lasers: whenever the panel is up, or while you're handling the screen (grip held / holding it).
 		var laser: MeshInstance3D = lasers[c]
-		var handling := rig.holding(c) or c.is_button_pressed("grip_click")
+		var handling := rig.holding(c) or prig.holding(c) or c.is_button_pressed("grip_click")
 		laser.visible = (panel.visible or handling) and c.get_has_tracking_data()
 		var length := 2.0
 		if hit != null:
 			length = float(hit.dist)
 		elif rig.holding(c):
 			length = float(rig._grabs[c].dist)
+		if prig.holding(c):
+			length = float(prig._grabs[c].dist)
 		elif sh != null:
 			length = float(sh.dist)
 		laser.scale = Vector3(1, 1, length)
 		laser.position = Vector3(0, 0, -length * 0.5)
 	if rig.is_held():
 		rig.drag(rays)
+	if prig.is_held():
+		prig.drag(rays)
 
 	if hits[active_hand] == null and not _ptr_down:
 		for c in hands:
@@ -748,7 +772,15 @@ func _update_xr_pointers(delta: float) -> void:
 	for c in hands:
 		var v := c.get_vector2("primary")
 		var at_screen: bool = rig.holding(c) or screen_hits[c] != null
-		if hits[c] == null and at_screen:
+		if prig.holding(c): # holding the menu: up/down resizes, left/right closer / further
+			var dzm := func(x: float) -> float: return 0.0 if absf(x) < 0.25 else (x - signf(x) * 0.25) / 0.75
+			var mr: float = dzm.call(v.y) * delta * 0.7
+			var mp: float = dzm.call(v.x) * delta * 0.7
+			if mr != 0.0 or mp != 0.0:
+				prig.adjust(mr, mp, c)
+				_refresh_setting_labels()
+			flicked[c] = absf(v.x) > 0.3
+		elif hits[c] == null and at_screen:
 			var dz := func(x: float) -> float: return 0.0 if absf(x) < 0.25 else (x - signf(x) * 0.25) / 0.75
 			var rs: float = dz.call(v.y) * delta * 0.9
 			var ps: float = dz.call(v.x) * delta * 0.9
@@ -795,14 +827,19 @@ func _on_toy_touched(strength: float) -> void:
 func _on_xr_button(action: String, c: XRController3D, pressed: bool) -> void:
 	match action:
 		"grip_click":
-			# Grip grabs the toy if your hand is on it, otherwise the screen if you're pointing at it.
+			# Grip grabs the toy if your hand is on it, else the menu or the screen, whichever you point at.
 			_toy_hand = c
 			if pressed:
-				if not toy.try_grab(c):
+				if not toy.try_grab(c) and not prig.grab(c, c.global_position, -c.global_basis.z):
 					rig.grab(c, c.global_position, -c.global_basis.z)
+				if prig.holding(c) and _ptr_down and c == active_hand:
+					_ptr_button(false) # no half-finished click while you move it
 			else:
 				toy.release(c)
 				rig.release(c)
+				if prig.holding(c):
+					prig.release(c)
+					_refresh_setting_labels()
 		"trigger_click":
 			if pressed and hits[c] != null:
 				active_hand = c
@@ -851,7 +888,10 @@ func _input(event: InputEvent) -> void:
 		if event.button_index == MOUSE_BUTTON_WHEEL_UP or event.button_index == MOUSE_BUTTON_WHEEL_DOWN:
 			if not event.pressed:
 				return
-			if hit != null:
+			if hit != null and event.ctrl_pressed:
+				prig.adjust(0.06 if event.button_index == MOUSE_BUTTON_WHEEL_UP else -0.06, 0.0)
+				_refresh_setting_labels()
+			elif hit != null:
 				_ptr_move(hit.pixel)
 				_ptr_wheel(event.button_index)
 			else:
@@ -872,6 +912,9 @@ func _input(event: InputEvent) -> void:
 			if event.pressed and tt > 0.0 and (hit == null or tt < float(hit.dist)):
 				toy.poke(o + d * tt, d * 1.4 + Vector3(randf_range(-0.6, 0.6), 0.7, 0.0))
 				return
+			if event.pressed and hit != null and event.ctrl_pressed:
+				prig.grab("mouse", o, d)
+				return
 			if event.pressed:
 				if hit != null:
 					_ptr_move(hit.pixel)
@@ -883,8 +926,13 @@ func _input(event: InputEvent) -> void:
 				if _ptr_down:
 					_ptr_button(false)
 				rig.release("mouse")
+				if prig.holding("mouse"):
+					prig.release("mouse")
+					_refresh_setting_labels()
 	elif event is InputEventMouseMotion:
-		if rig.holding("mouse"):
+		if prig.holding("mouse"):
+			prig.drag({"mouse": [camera.project_ray_origin(event.position), camera.project_ray_normal(event.position)]})
+		elif rig.holding("mouse"):
 			rig.drag({"mouse": [camera.project_ray_origin(event.position), camera.project_ray_normal(event.position)]})
 		elif _mouse_look:
 			_yaw -= event.relative.x * 0.004
@@ -977,22 +1025,18 @@ func _recenter() -> void:
 
 
 func _place_panel() -> void:
-	var fwd := _flat_forward()
-	var eye := camera.global_position
-	var s: float = MENU_SIZES[menu_size_idx][1] # a bigger menu sits a little further away, a little lower
-	panel.scale = Vector3.ONE * s
-	var pos := eye + fwd * (1.15 + 0.5 * (s - 1.0))
-	pos.y = eye.y - 0.35 * s
-	var basis := Basis.looking_at(fwd, Vector3.UP) * Basis(Vector3.RIGHT, deg_to_rad(-20.0))
-	panel.global_transform = Transform3D(basis, pos)
+	prig.place()
 
 
 func _toggle_panel() -> void:
 	panel.visible = not panel.visible
 	if panel.visible:
 		_place_panel()
-	elif _ptr_down:
-		_ptr_button(false)
+	else:
+		for h in prig._grabs.keys():
+			prig.release(h)
+		if _ptr_down:
+			_ptr_button(false)
 
 
 func _set_projection(p: int) -> void:
@@ -1058,7 +1102,10 @@ func _load_settings() -> void:
 	resume_on = bool(store.get_setting("resume", true))
 	end_action = clampi(int(store.get_setting("end_action", 0)), 0, END_ACTIONS.size() - 1)
 	autohide_on = bool(store.get_setting("autohide", true))
-	menu_size_idx = clampi(int(store.get_setting("menu_size", 0)), 0, MENU_SIZES.size() - 1)
+	toy.set_mode(clampi(int(store.get_setting("toy_mode", 0)), 0, FidgetToy.MODES.size() - 1))
+	hands_on = bool(store.get_setting("hands", true))
+	for hv in hand_vis:
+		hv.set_shown(hands_on)
 	haptics_on = bool(store.get_setting("haptics", true))
 	subs_pref = str(store.get_setting("subs_pref", ""))
 	subs_size_idx = clampi(int(store.get_setting("subs_size", 1)), 0, SUB_SIZES.size() - 1)
@@ -1263,9 +1310,22 @@ func _on_setting(key: String) -> void:
 			autohide_on = not autohide_on
 			store.set_setting("autohide", autohide_on)
 		"menu_size":
-			menu_size_idx = (menu_size_idx + 1) % MENU_SIZES.size()
-			store.set_setting("menu_size", menu_size_idx)
-			_place_panel()
+			# Next preset up (wrapping round); also puts a moved menu back in front of you.
+			var next: float = MENU_SIZES[0][1]
+			for m in MENU_SIZES:
+				if m[1] > prig.size + 0.02:
+					next = m[1]
+					break
+			prig.reset(next)
+			ui.set_status("Menu size: %s. Tip: squeeze grip on the menu to move it, or grip it with both hands to stretch it." % _menu_size_label())
+		"toy_mode":
+			toy.set_mode((toy.mode + 1) % FidgetToy.MODES.size())
+			store.set_setting("toy_mode", toy.mode)
+		"hands":
+			hands_on = not hands_on
+			store.set_setting("hands", hands_on)
+			for hv in hand_vis:
+				hv.set_shown(hands_on)
 		"family":
 			YouTube.family_filter = not YouTube.family_filter
 			store.set_setting("family", YouTube.family_filter)
@@ -1297,6 +1357,8 @@ func _apply_accent() -> void:
 	toy.set_accent(c)
 	for c2 in lasers:
 		(lasers[c2].material_override as StandardMaterial3D).albedo_color = c
+	for hv in hand_vis:
+		hv.set_accent(c)
 
 
 func _refresh_setting_labels() -> void:
@@ -1308,7 +1370,9 @@ func _refresh_setting_labels() -> void:
 	ui.set_setting("resume", "On" if resume_on else "Off")
 	ui.set_setting("end_action", END_ACTIONS[end_action])
 	ui.set_setting("autohide", "On" if autohide_on else "Off")
-	ui.set_setting("menu_size", MENU_SIZES[menu_size_idx][0])
+	ui.set_setting("menu_size", _menu_size_label())
+	ui.set_setting("toy_mode", FidgetToy.MODES[toy.mode])
+	ui.set_setting("hands", "On" if hands_on else "Off")
 	ui.set_setting("family", "On" if YouTube.family_filter else "Off")
 	ui.set_setting("haptics", "On" if haptics_on else "Off")
 	ui.set_setting("curve", ScreenRig.CURVES[rig.curve_mode])
@@ -1835,3 +1899,125 @@ func _delete_from_list(id: String) -> void:
 	ui.show_results(search_results)
 	ui.set_status("Deleted \"%s\"." % title + ("" if not search_results.is_empty() else " Nothing saved any more."))
 	_refresh_setting_labels()
+
+
+func _menu_size_label() -> String:
+	for m in MENU_SIZES:
+		if absf(m[1] - prig.size) < 0.02:
+			return m[0]
+	return "%d%%" % roundi(prig.size * 100.0)
+
+
+func _rig_test(shots: String) -> void:
+	await get_tree().create_timer(1.0).timeout # let recenter run
+	panel.visible = true
+	_place_panel()
+	var cam := camera.global_position
+	var shot := func(n: String) -> void:
+		if shots != "":
+			await RenderingServer.frame_post_draw
+			get_viewport().get_texture().get_image().save_png(shots.path_join("rig_%s.png" % n))
+	var report := func(step: String) -> void:
+		var facing := panel.global_basis.z.normalized().dot((cam - panel.global_position).normalized())
+		print("[menu] %-14s size=%.2f pos=%s facing=%.3f custom=%s label=%s" % [step, prig.size,
+			panel.global_position.snapped(Vector3.ONE * 0.01), facing, prig.custom, _menu_size_label()])
+	await get_tree().process_frame
+	report.call("start")
+	await shot.call("1_start")
+	# Grab the menu's top-left corner area and swing it 25 deg left, 10 deg up.
+	var ray_to := func(yaw_deg: float, pitch_deg: float) -> Vector3:
+		return (Basis(Vector3.UP, deg_to_rad(-yaw_deg)) * Basis(Vector3.RIGHT, deg_to_rad(pitch_deg)) * Vector3.FORWARD).normalized()
+	print("[menu] grab ok: ", prig.grab("hand", cam, ray_to.call(-15.0, -10.0)))
+	for i in 26:
+		prig.drag({"hand": [cam, ray_to.call(-15.0 - i, -10.0 + i * 0.4)]})
+		await get_tree().process_frame
+	prig.release("hand")
+	report.call("dragged")
+	# Two hands, pulled from 0.4 m to 0.24 m apart: 60 % size.
+	var c := panel.global_position
+	var l0 := cam + Vector3(-0.2, -0.2, 0)
+	var r0 := cam + Vector3(0.2, -0.2, 0)
+	prig.grab("L", l0, (c - l0).normalized())
+	prig.grab("R", r0, (c - r0).normalized())
+	for i in 11:
+		var k := 0.2 - 0.008 * i
+		var li := cam + Vector3(-k, -0.2, 0)
+		var ri := cam + Vector3(k, -0.2, 0)
+		prig.drag({"L": [li, (c - li).normalized()], "R": [ri, (c - ri).normalized()]})
+		await get_tree().process_frame
+	prig.release("L")
+	prig.release("R")
+	report.call("two-hand")
+	_refresh_setting_labels()
+	await shot.call("2_small_left")
+	var before := panel.global_position
+	_toggle_panel()
+	_toggle_panel()
+	print("[menu] reopened at the same spot: ", panel.global_position.distance_to(before) < 0.01)
+	prig.adjust(0.3, 0.0)
+	report.call("thumbstick")
+	_on_setting("menu_size")
+	report.call("preset")
+
+	# Toy modes: throw it, watch where it ends up after 3 s.
+	toy.set_shape(0)
+	for m in FidgetToy.MODES.size():
+		toy.set_mode(m)
+		toy.global_position = toy.home
+		toy.vel = Vector3(1.2, 0.8, 0.0)
+		await get_tree().create_timer(3.0).timeout
+		print("[toy] %-12s from home %.2f m, height %.2f m, speed %.2f" % [FidgetToy.MODES[m],
+			toy.global_position.distance_to(toy.home), toy.global_position.y, toy.vel.length()])
+	_recenter()
+	await get_tree().create_timer(3.0).timeout
+	print("[toy] after Recenter: %.2f m from home, mode still %s" % [toy.global_position.distance_to(toy.home), FidgetToy.MODES[toy.mode]])
+
+	# A tracked hand (fake tracker, a relaxed open right hand) and the stand-in controller, in front of you.
+	panel.visible = false
+	var ht := XRHandTracker.new()
+	ht.name = &"/user/hand_tracker/right"
+	ht.hand = XRPositionalTracker.TRACKER_HAND_RIGHT
+	var wrist := cam + Vector3(0.08, -0.15, -0.45)
+	var fingers := [[2, -0.035, 0.75], [6, -0.02, 1.0], [11, 0.0, 1.05], [16, 0.02, 1.0], [21, 0.04, 0.85]]
+	ht.set_hand_joint_transform(1, Transform3D(Basis.IDENTITY, wrist))
+	ht.set_hand_joint_flags(1, XRHandTracker.HAND_JOINT_FLAG_POSITION_VALID)
+	ht.set_hand_joint_radius(1, 0.02)
+	for f in fingers:
+		var base := wrist + Vector3(f[1], 0.03, -0.01)
+		var dir := Vector3(f[1] * 4.0, 1.0, -0.35).normalized()
+		if f[0] == 2:
+			dir = Vector3(-0.9, 0.5, -0.3).normalized()
+		var lens := [0.045, 0.04, 0.026, 0.022, 0.0]
+		var p := base
+		for k in 5:
+			ht.set_hand_joint_transform(f[0] + k, Transform3D(Basis.IDENTITY, p))
+			ht.set_hand_joint_flags(f[0] + k, XRHandTracker.HAND_JOINT_FLAG_POSITION_VALID)
+			ht.set_hand_joint_radius(f[0] + k, 0.011 - k * 0.0012)
+			p += dir * lens[k] * f[2]
+			dir = (dir + Vector3(0, 0, -0.25)).normalized() # a slight curl
+	ht.has_tracking_data = true
+	ht.hand_tracking_source = XRHandTracker.HAND_TRACKING_SOURCE_UNOBSTRUCTED
+	XRServer.add_tracker(ht)
+	var g := XRController3D.new() # stand-in grip pose for the left controller
+	add_child(g)
+	g.global_transform = Transform3D(Basis(Vector3.UP, 0.5) * Basis(Vector3.RIGHT, -0.4), cam + Vector3(-0.12, -0.15, -0.4))
+	var left := HandVisuals.new()
+	add_child(left)
+	left.setup("left", g)
+	var right := HandVisuals.new()
+	add_child(right)
+	right.setup("right", XRController3D.new())
+	right.set_accent(ACCENTS[accent_idx][1])
+	left.set_accent(ACCENTS[accent_idx][1])
+	camera.look_at(cam + Vector3(0, -0.15, -0.45))
+	await get_tree().create_timer(0.3).timeout
+	print("[hands] right hand drawn: %s, bones shown: %d, left controller stand-in shown: %s" % [right._hand_root.visible,
+		right._bones.filter(func(b): return b.visible).size(), left._fallback.is_visible_in_tree()])
+	await shot.call("3_hands")
+	left.set_shown(false)
+	right.set_shown(false)
+	await get_tree().process_frame
+	print("[hands] hidden: ", not right._hand_root.is_visible_in_tree() and not left._fallback.is_visible_in_tree())
+	XRServer.remove_tracker(ht)
+	await get_tree().create_timer(0.5).timeout
+	get_tree().quit()

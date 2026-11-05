@@ -86,7 +86,19 @@ Linux executables are marked runnable inside the zip, so nobody needs a terminal
 | **Grip** while pointing at the screen | grab it: it follows your laser and always turns to face you |
 | **Grip with both hands** on the screen | pull apart / push together to resize |
 | Thumbstick while pointing at (or holding) the screen | up/down resize, left/right pull closer / push away |
+| **Grip** while pointing at the menu | move the menu (it turns to face you) |
+| **Grip with both hands** on the menu | pull apart / push together to resize it (45 % to 200 %) |
+| Thumbstick while holding the menu | up/down resize, left/right pull closer / push away |
 | Grip on the toy | grab / throw the toy (the toy takes priority when your hand is on it) |
+
+The menu remembers its size and where you put it relative to your view, so it opens in that spot wherever
+you're facing. **Settings > Menu size** steps through Small / Normal / Large / Extra large and puts a moved menu
+back in front of you. Desktop: Ctrl+scroll over the menu resizes it, Ctrl+left-drag moves it.
+
+**Hands and controllers** (Settings > Show hands and controllers, on by default): your controllers are drawn
+in your hands, using the headset's own controller model when the runtime provides one (OpenXR render models)
+and a plain stand-in otherwise. Put the controllers down and, with hand tracking, your hands are drawn from
+the tracked joints instead.
 
 ### Moving and resizing the screen (flat videos)
 
@@ -116,10 +128,11 @@ page takes over on first run while the helpers download (progress bar, "Try agai
   description snippet. (Search results don't include upload dates, so there are none.)
 - **Settings page** (scrolls), in sections:
   - *Watching*: Resume videos, When a video ends (Stop / Replay / Play next in the list), Hide the menu while
-    watching, Menu size (Normal / Large / Extra large).
+    watching, Menu size (Small / Normal / Large / Extra large, or any size by gripping the menu).
   - *Safety & account*: **Family-friendly filter** (on by default), YouTube account, Clear watch history (press
     twice).
-  - *Room & look*: Room, Fidget toy, Vibration, Colour theme, Ambient glow, Glow effects.
+  - *Room & look*: Room, Fidget toy, When you let go of the toy, Vibration, Show hands and controllers,
+    Colour theme, Ambient glow, Glow effects.
   - *Advanced*: Video decoding, Repair (re-downloads the helpers), version info.
 - **Volume** slider in the player controls (desktop: ↑/↓), remembered between sessions.
 - **Subtitles** (player row): cycles Off and the video's tracks: every human-made one, plus auto-generated
@@ -195,8 +208,10 @@ there are no asset files.
   shaders (Aurora and Starfield especially) are the other GPU cost to watch on the headset.
 - **Fidget toy** (Orb, Cube, Spinner, Donut, Off): it floats low to your right. **Grip** grabs it; let go
   mid-swing to throw it, and it carries your hand's velocity and spin. **Swipe** a hand through it to spin and
-  push it. The spinner keeps spinning on its axle for a long time. It springs back to its spot and bounces off
-  the floor, with haptics and sparks on every touch. In desktop mode, click it.
+  push it. The spinner keeps spinning on its axle for a long time. Haptics and sparks on every touch. In desktop
+  mode, click it. **When you let go of the toy**: *Floats back* (springs back to its spot), *Stays put* (coasts
+  to a stop and floats wherever you leave it) or *Falls* (gravity: drops, bounces and rolls to a stop on the
+  floor). Recenter calls it back to its spot in any mode.
 
 Remembered between sessions: environment, toy, accent, bias lighting, bloom, quality, screen size, decoder,
 swap eyes, account, the last 60 videos with their
