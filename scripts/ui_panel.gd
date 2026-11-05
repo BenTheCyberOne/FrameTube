@@ -15,7 +15,7 @@ signal decoder_pressed
 signal swap_eyes_toggled(on: bool)
 signal recenter_pressed
 signal hide_pressed
-signal feed_pressed(key: String) # "history" | "subscriptions" | "watch_later" | "recommended"
+signal feed_pressed(key: String) # "history" | "downloads" | "subscriptions" | "watch_later" | "recommended"
 signal account_pressed
 signal screen_size_pressed
 signal reset_screen_pressed
@@ -64,6 +64,8 @@ var about_label: Label
 var settings_list: VBoxContainer
 var subs_btn: Button
 var speed_btn: Button
+var download_btn: Button
+signal download_pressed
 signal subs_pressed
 signal speed_pressed
 var pin_page: VBoxContainer
@@ -143,7 +145,7 @@ func _ready() -> void:
 	var feeds := HBoxContainer.new()
 	feeds.add_theme_constant_override("separation", 8)
 	browse_page.add_child(feeds)
-	for f in [["Continue watching", "history"], ["Subscriptions", "subscriptions"], ["Watch later", "watch_later"],
+	for f in [["Continue watching", "history"], ["Downloads", "downloads"], ["Subscriptions", "subscriptions"], ["Watch later", "watch_later"],
 			["For you", "recommended"]]:
 		var b := _button(f[0], feed_pressed.emit.bind(f[1]))
 		b.theme_type_variation = &"ChipButton"
@@ -197,6 +199,7 @@ func _ready() -> void:
 	_setting_row("menu_size", "Menu size", "Bigger menu and text, easier to read")
 	_setting_row("curve", "Screen shape", "Curve the screen around you, like a cinema")
 	_setting_row("subs_size", "Subtitle size", "How big subtitles are")
+	_setting_row("downloads", "Saved videos", "Videos you pressed Download on. Press to open their folder")
 	_section("Safety & account")
 	_setting_row("family", "Family-friendly filter",
 		"Hides videos with adult or gory words in them, and blocks 18+ videos")
@@ -348,6 +351,9 @@ func _ready() -> void:
 	volume_slider.value_changed.connect(func(v: float): volume_changed.emit(v))
 	ctl.add_child(volume_slider)
 	ctl.add_child(_spacer())
+	download_btn = _button("Download", func(): download_pressed.emit())
+	download_btn.tooltip_text = "Save this video to watch without internet"
+	ctl.add_child(download_btn)
 	ctl.add_child(_button("Recenter", func(): recenter_pressed.emit()))
 	ctl.add_child(_button("Hide menu", func(): hide_pressed.emit()))
 

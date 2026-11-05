@@ -43,6 +43,8 @@ var quality_idx := 2
 var rig: ScreenRig
 var screen_hits := {} # controller -> ray hit on the video screen (or null)
 var signin: SignIn
+var downloads: Downloads
+var _delete_confirm_until := 0.0
 var _signin_choice := 0 # which browser the next sign-in uses (moves on after a failed try)
 var _signout_confirm_until := 0.0
 var _save_timer := 0.0
@@ -111,6 +113,13 @@ func _ready() -> void:
 		ui.set_status(t)
 		_apply_account())
 	signin.finished.connect(_on_signin_finished)
+	downloads = Downloads.new()
+	add_child(downloads)
+	downloads.changed.connect(_refresh_download_ui)
+	downloads.done.connect(func(_id: String, _ok: bool, msg: String):
+		ui.set_status(msg)
+		_refresh_setting_labels())
+	ui.download_pressed.connect(_on_download_pressed)
 	_load_settings()
 	_set_projection(YouTube.FLAT)
 	ui.auto_keyboard = xr_mode # VR: on-screen keyboard pops up when you tap the search box
@@ -139,6 +148,41 @@ func _run_autotest() -> void:
 	if not opts.has("play"):
 		return
 	_autotest_running = not opts.has("welcome") # --welcome: keep the real startup list + menu auto-hide
+	if opts.has("download-test"):
+		# --download-test=<url> [--dl-height=360]: resolve, save it, play the saved copy, delete it, quit.
+		var url: String = opts["download-test"]
+		var h := int(opts.get("dl-height", "360"))
+		store.persist = false
+		var info: Dictionary = await _await_async(func(): return YouTube.resolve(url, h))
+		if info.has("error"):
+			print("[dl] resolve error: ", info.error)
+			get_tree().quit()
+			return
+		var t0 := Time.get_ticks_msec()
+		downloads.changed.connect(func():
+			if not downloads.current.is_empty():
+				print("[dl] %d%%  button=%s" % [int(downloads.current.percent), downloads.label(downloads.current.id)]))
+		downloads.add(url, info, h, 0)
+		if opts.has("dl-cancel"):
+			get_tree().create_timer(float(opts["dl-cancel"])).timeout.connect(func(): downloads.cancel(info.id))
+		var r: Array = await downloads.done
+		if opts.has("dl-cancel"):
+			var left := Array(DirAccess.get_files_at(Downloads.folder())).filter(func(f): return f.contains(info.id))
+			print("[dl] cancelled: ok=%s msg=%s leftover=%s" % [r[1], r[2], left])
+		print("[dl] ok=%s in %.1fs: %s" % [r[1], (Time.get_ticks_msec() - t0) / 1000.0, r[2]])
+		if r[1]:
+			var e: Dictionary = downloads.items[r[0]]
+			print("[dl] file=%s bytes=%d exists=%s" % [e.file, e.bytes, FileAccess.file_exists(e.file)])
+			_play(url, 0.0)
+			await get_tree().create_timer(6.0).timeout
+			print("[dl] offline play: title='%s' pos=%.1f stats=%s" % [ui.title_label.text, engine.get_position(), engine.stats()])
+			current_url = url
+			_on_download_pressed()
+			_on_download_pressed() # press twice = delete
+			await get_tree().create_timer(2.0).timeout
+			print("[dl] after delete: saved=%s exists=%s" % [downloads.has(r[0]), FileAccess.file_exists(e.file)])
+		get_tree().quit()
+		return
 	if opts.has("signin-test"):
 		# --signin-test=<browser name>: the real sign-in flow against a headless browser on youtube.com,
 		# treating YouTube's visitor cookie as "signed in". Writes to a test file, never cookies.txt.
@@ -1113,6 +1157,9 @@ func _on_setting(key: String) -> void:
 			store.set_setting("bloom", envs.bloom)
 		"repair":
 			_repair()
+		"downloads":
+			OS.shell_open(Downloads.folder())
+			ui.set_status("Saved videos are in " + Downloads.folder() + (" (opened on the computer screen)." if xr_mode else "."))
 		"resume":
 			resume_on = not resume_on
 			store.set_setting("resume", resume_on)
@@ -1174,6 +1221,9 @@ func _refresh_setting_labels() -> void:
 	ui.set_setting("curve", ScreenRig.CURVES[rig.curve_mode])
 	ui.set_setting("subs_size", SUB_SIZES[subs_size_idx][0])
 	ui.set_setting("pin", "On (change)" if _pin_set() else "Off (set a PIN)")
+	var n := downloads.items.size()
+	ui.set_setting("downloads", "None yet" if n == 0 else "%d video%s · %s" % [n, "" if n == 1 else "s",
+		Downloads.size_text(downloads.total_bytes())])
 	if Time.get_ticks_msec() / 1000.0 > _clear_confirm_until:
 		ui.set_setting("clear_history", "Clear (%d)" % store.history.size() if not store.history.is_empty() else "Empty")
 
@@ -1253,6 +1303,12 @@ func _check_signin_expired() -> void:
 
 
 func _on_feed(key: String) -> void:
+	if key == "downloads":
+		search_results = downloads.list()
+		ui.show_results(search_results)
+		ui.set_status("Your saved videos play without internet." if not search_results.is_empty()
+			else "Nothing saved yet. While a video plays, press Download to keep it for offline watching.")
+		return
 	if key == "history":
 		search_results = []
 		for h in store.history:
@@ -1479,6 +1535,18 @@ func _play(url: String, start := -1.0, keep_projection := false) -> void:
 	if start < 0.0:
 		start = store.resume_position(url) if resume_on else 0.0
 	ui.set_status("Loading video..." if start <= 0.0 else "Loading, resuming at %s..." % UIPanel._fmt(start))
+	var local := downloads.local_info(url)
+	if not local.is_empty():
+		# Saved copy: no YouTube request at all. The family filter still applies to it.
+		if YouTube.family_filter and (int(local.age_limit) >= 18 or not YouTube.family_ok(local)):
+			ui.set_status("The family-friendly filter blocked this video. (You can turn it off in Settings.)")
+			return
+		var path: String = local.video_url
+		var job := func():
+			local.probe = YouTube.probe_vr(path) # local file: instant
+			return local
+		_run_async(job, _on_resolved.bind(_request, url, start, keep_projection))
+		return
 	var h: int = QUALITIES[quality_idx]
 	_run_async(func(): return YouTube.resolve(url, h), _on_resolved.bind(_request, url, start, keep_projection))
 
@@ -1501,12 +1569,16 @@ func _on_resolved(r: Dictionary, id: int, url: String, start: float, keep_projec
 		_resize_screen()
 	elif saved >= 0 and saved < PROJECTIONS.size():
 		_set_projection(saved) # user corrected the guess for this video before
+	elif int(r.get("projection_hint", -1)) >= 0 and int(r.projection_hint) < PROJECTIONS.size():
+		_set_projection(int(r.projection_hint)) # how it was being watched when it was saved
 	else:
 		_set_projection(YouTube.guess_projection(r))
 	store.touch(url, r.title, r.duration, r.get("channel", ""), int(r.get("views", 0)))
 	_refresh_setting_labels() # history count
 	_choose_subs(r.get("subs", []))
-	ui.set_title("%s   (%dx%d %s)" % [r.title, r.width, r.height, r.vcodec.get_slice(".", 0)])
+	ui.set_title("%s   (%dx%d %s%s)" % [r.title, r.width, r.height, r.vcodec.get_slice(".", 0),
+		", saved" if r.get("offline", false) else ""])
+	_refresh_download_ui()
 
 
 ## Runs `job` on a worker thread, then calls `done(result)` on the main thread.
@@ -1523,3 +1595,55 @@ func _async_body(th: Thread, job: Callable, done: Callable) -> void:
 func _async_finish(th: Thread, done: Callable, r: Variant) -> void:
 	th.wait_to_finish()
 	done.call(r)
+
+
+# --- Downloads (only when the user asks) ---------------------------------------------------------
+
+func _on_download_pressed() -> void:
+	var id := Store.video_id(current_url)
+	if id == "":
+		return
+	match downloads.state(id):
+		"saved":
+			var now := Time.get_ticks_msec() / 1000.0
+			if now < _delete_confirm_until:
+				_delete_confirm_until = 0.0
+				var playing_file := str(_last_info.get("video_url", "")) == str(downloads.items[id].file)
+				if playing_file:
+					engine.stop() # release the file before deleting it
+				downloads.remove(id)
+				ui.set_status("Deleted the saved copy." + (" Press the video again to stream it." if playing_file else ""))
+			else:
+				_delete_confirm_until = now + 4.0
+				ui.download_btn.text = "Delete?"
+				ui.set_status("Press again to delete the saved copy of this video.")
+				return
+		"downloading", "queued":
+			downloads.cancel(id)
+			ui.set_status("Download cancelled.")
+		_:
+			if _last_info.get("is_live", false):
+				ui.set_status("Live streams can't be saved.")
+				return
+			downloads.add(current_url, _last_info, QUALITIES[quality_idx], projection)
+			ui.set_status("Saving this video for offline watching (press the button again to cancel). You can keep watching meanwhile.")
+	_refresh_download_ui()
+
+
+func _refresh_download_ui() -> void:
+	if ui.download_btn == null:
+		return
+	if Time.get_ticks_msec() / 1000.0 < _delete_confirm_until:
+		return
+	var id := Store.video_id(current_url)
+	ui.download_btn.text = downloads.label(id, bool(_last_info.get("is_live", false))) if id != "" else "Download"
+
+
+func _await_async(job: Callable) -> Variant:
+	var holder := [null, false]
+	_run_async(job, func(r):
+		holder[0] = r
+		holder[1] = true)
+	while not holder[1]:
+		await get_tree().process_frame
+	return holder[0]

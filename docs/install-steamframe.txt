@@ -38,6 +38,7 @@ HOW TO USE IT
 
 Tap a "Discover" topic to find something to watch without typing.
 Videos remember where you stopped: find them under "Continue watching".
+Want to watch without internet? Press "Download" while a video plays; it shows up under "Downloads".
 
 
 IF SOMETHING GOES WRONG

@@ -159,6 +159,13 @@ page takes over on first run while the helpers download (progress bar, "Try agai
     Desktop Mode.
   - When YouTube ends the session, FrameTube notices, removes it and asks you to sign in again.
   - A hand-made `cookies.txt` (Netscape format) next to the app also works; the button then shows "Using cookies.txt".
+- **Download** (player controls, only when you press it): saves the playing video at the current quality to
+  `Videos/FrameTube` (Windows: your Videos folder; SteamOS: `~/Videos/FrameTube`), with live progress; press
+  again to cancel. Saved videos appear under **Downloads** on Browse and play from the file, with no internet
+  needed and instant seeking. They keep their video type, resume point and the family filter. Press **Saved**, then
+  **Delete?** to remove one; Settings > Saved videos shows the count/size and opens the folder. Live streams
+  can't be saved, and subtitles aren't saved yet. Downloading is for your own offline viewing: respect
+  creators' rights and YouTube's terms.
 - Player row: **Video type** (auto-detected; cycle it if a video looks wrong), **Screen** size + **Reset**,
   **Quality** (HD / 2K / 4K / 5K / 8K maximum), **Swap eyes**.
 
