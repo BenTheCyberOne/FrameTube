@@ -45,6 +45,7 @@ var screen_hits := {} # controller -> ray hit on the video screen (or null)
 var signin: SignIn
 var downloads: Downloads
 var _delete_confirm_until := 0.0
+var _preparing := {} # video ids being looked up before a Download from the results starts
 var _signin_choice := 0 # which browser the next sign-in uses (moves on after a failed try)
 var _signout_confirm_until := 0.0
 var _save_timer := 0.0
@@ -120,6 +121,9 @@ func _ready() -> void:
 		ui.set_status(msg)
 		_refresh_setting_labels())
 	ui.download_pressed.connect(_on_download_pressed)
+	ui.result_download.connect(_download_result)
+	ui.card_download_text = func(id: String) -> String:
+		return "Preparing..." if _preparing.has(id) else downloads.label(id)
 	_load_settings()
 	_set_projection(YouTube.FLAT)
 	ui.auto_keyboard = xr_mode # VR: on-screen keyboard pops up when you tap the search box
@@ -148,6 +152,38 @@ func _run_autotest() -> void:
 	if not opts.has("play"):
 		return
 	_autotest_running = not opts.has("welcome") # --welcome: keep the real startup list + menu auto-hide
+	if opts.has("cards-test"):
+		# --cards-test [--shots=dir]: result cards with Download buttons; presses the first one (a real,
+		# tiny video), screenshots the progress, waits for it to save, then deletes it.
+		store.persist = false
+		panel.visible = true
+		_place_panel()
+		search_results = [
+			{"id": "jNQXAC9IVRw", "title": "Me at the zoo", "duration": 19.0, "channel": "jawed", "views": 380000000},
+			{"id": "AAAAAAAAAAA", "title": "A live one", "live": true, "channel": "Test"},
+			{"id": "BBBBBBBBBBB", "title": "VR180 3D test card with a long title that wraps onto a second line", "duration": 600.0, "channel": "Test"}]
+		ui.show_results(search_results)
+		var labels := func() -> Array: return ui._card_dl.keys().map(func(k): return "%s=%s" % [k, ui._card_dl[k].text])
+		print("[cards] buttons: ", labels.call())
+		_download_result(0)
+		print("[cards] after press: ", labels.call(), " status=", ui.status_label.text)
+		var shot_dir: String = opts.get("shots", "")
+		var shot_taken := false
+		while downloads.state("jNQXAC9IVRw") != "saved":
+			await get_tree().process_frame
+			if not shot_taken and downloads.state("jNQXAC9IVRw") == "downloading" and shot_dir != "":
+				await RenderingServer.frame_post_draw
+				viewport.get_texture().get_image().save_png(shot_dir.path_join("cards.png"))
+				shot_taken = true
+			if Time.get_ticks_msec() > 120000:
+				break
+		print("[cards] saved: ", labels.call(), " status=", ui.status_label.text)
+		_download_result(0)
+		print("[cards] press on saved: status=", ui.status_label.text)
+		downloads.remove("jNQXAC9IVRw")
+		await get_tree().create_timer(1.0).timeout
+		get_tree().quit()
+		return
 	if opts.has("download-test"):
 		# --download-test=<url> [--dl-height=360]: resolve, save it, play the saved copy, delete it, quit.
 		var url: String = opts["download-test"]
@@ -1631,6 +1667,7 @@ func _on_download_pressed() -> void:
 
 
 func _refresh_download_ui() -> void:
+	ui.refresh_card_downloads()
 	if ui.download_btn == null:
 		return
 	if Time.get_ticks_msec() / 1000.0 < _delete_confirm_until:
@@ -1647,3 +1684,40 @@ func _await_async(job: Callable) -> Variant:
 	while not holder[1]:
 		await get_tree().process_frame
 	return holder[0]
+
+
+## The Download button on a search result: look the video up (also applies the family filter), then save it.
+func _download_result(i: int) -> void:
+	if i >= search_results.size():
+		return
+	var r: Dictionary = search_results[i]
+	var url: String = r.get("url", "https://www.youtube.com/watch?v=" + str(r.id))
+	var id := Store.video_id(url)
+	match downloads.state(id):
+		"saved":
+			ui.set_status("Already saved. Tap the video to watch it, even without internet.")
+			return
+		"downloading", "queued":
+			downloads.cancel(id)
+			ui.set_status("Download cancelled.")
+			_refresh_download_ui()
+			return
+	if _preparing.has(id):
+		return
+	_preparing[id] = true
+	_refresh_download_ui()
+	ui.set_status("Getting \"%s\" ready to save..." % r.get("title", "the video"))
+	var h: int = QUALITIES[quality_idx]
+	_run_async(func(): return YouTube.resolve(url, h), _on_result_resolved_for_download.bind(url, id, h))
+
+
+func _on_result_resolved_for_download(info: Dictionary, url: String, id: String, h: int) -> void:
+	_preparing.erase(id)
+	if info.has("error"):
+		ui.set_status("Couldn't save this video. " + YouTube.friendly_error(info.error).message)
+	elif info.get("is_live", false):
+		ui.set_status("Live streams can't be saved.")
+	else:
+		downloads.add(url, info, h, store.saved_projection(url))
+		ui.set_status("Saving \"%s\" in the background (press its button again to cancel)." % info.get("title", ""))
+	_refresh_download_ui()

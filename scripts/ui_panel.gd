@@ -6,6 +6,7 @@ extends PanelContainer
 
 signal submitted(text: String)
 signal result_chosen(index: int)
+signal result_download(index: int) # the small Download button on a result card
 signal play_pause_pressed
 signal seek_relative(seconds: float)
 signal seek_to(seconds: float)
@@ -42,6 +43,9 @@ var input: LineEdit
 var results_scroll: ScrollContainer
 var results_grid: GridContainer
 var thumbs: Thumbs
+## id -> label for a card's Download button ("Download", "Saving 45%", "Saved", ...). Set by main.
+var card_download_text: Callable
+var _card_dl := {} # video id -> that card's Download button
 var status_label: Label
 var title_label: Label
 var clock_label: Label
@@ -623,6 +627,7 @@ func set_setting(key: String, value: String) -> void:
 ## items: {id, title, [duration, channel, views, description, live, verified, resume]}
 func show_results(items: Array) -> void:
 	thumbs.cancel_pending()
+	_card_dl.clear()
 	for c in results_grid.get_children():
 		c.queue_free()
 	for i in items.size():
@@ -632,6 +637,7 @@ func show_results(items: Array) -> void:
 
 
 const THUMB := Vector2(240, 135)
+const DL_W := 140.0 # width of a card's Download button
 
 ## One result: [thumbnail with VR badges / duration / live tag / resume bar] [title, channel · views, snippet]
 ## The card is a PanelContainer (so it grows to fit its content) with a transparent Button stacked on
@@ -725,13 +731,48 @@ func _make_card(it: Dictionary, index: int) -> PanelContainer:
 			bx.add_child(_chip(b, accent.darkened(0.35) * Color(1, 1, 1, 0.92), Color.WHITE, Vector2.ZERO))
 		overlay.add_child(bx)
 
+	var id := str(it.get("id", ""))
+	var has_dl: bool = id != "" and not it.get("live", false)
+	if has_dl: # keep the text clear of the Download button (which sits in the layer on top)
+		var reserve := Control.new()
+		reserve.custom_minimum_size.x = DL_W
+		row.add_child(reserve)
 	_ignore_mouse(row)
 	var hit := Button.new() # on top of everything: the whole card is one big button
 	hit.theme_type_variation = &"CardButton"
 	hit.focus_mode = FOCUS_NONE
 	hit.pressed.connect(func(): result_chosen.emit(index))
 	card.add_child(hit)
+	# Download button in the card's bottom-right corner, above the card button so it gets its own clicks.
+	if has_dl:
+		var layer := Control.new()
+		layer.mouse_filter = MOUSE_FILTER_IGNORE
+		card.add_child(layer)
+		var dl := _button(card_download_text.call(id) if card_download_text.is_valid() else "Download",
+			func(): result_download.emit(index))
+		dl.theme_type_variation = &"ChipButton"
+		dl.add_theme_font_size_override("font_size", 19)
+		dl.tooltip_text = "Save to watch without internet"
+		dl.custom_minimum_size.x = DL_W
+		# Right edge, vertically centred.
+		dl.anchor_left = 1.0
+		dl.anchor_right = 1.0
+		dl.anchor_top = 0.5
+		dl.anchor_bottom = 0.5
+		dl.grow_horizontal = Control.GROW_DIRECTION_BEGIN
+		dl.grow_vertical = Control.GROW_DIRECTION_BOTH
+		layer.add_child(dl)
+		_card_dl[id] = dl
 	return card
+
+
+## Re-reads every visible card's Download label (progress, saved, ...).
+func refresh_card_downloads() -> void:
+	if not card_download_text.is_valid():
+		return
+	for id in _card_dl:
+		if is_instance_valid(_card_dl[id]):
+			_card_dl[id].text = card_download_text.call(id)
 
 
 ## Small rounded label: durations, LIVE, VR/resolution badges.
