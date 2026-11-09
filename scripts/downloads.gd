@@ -20,6 +20,7 @@ var current := {} # running job + {percent, phase, phases, cancelled}
 var save_langs: Array = ["all"]
 var _pid := -1
 var _thread: Thread
+var link: DeviceLink # set by main: saved videos can be on their way to another device
 
 
 func _ready() -> void:
@@ -29,6 +30,8 @@ func _ready() -> void:
 static func folder() -> String:
 	var movies := OS.get_system_dir(OS.SYSTEM_DIR_MOVIES)
 	var dir := movies.path_join("FrameTube") if movies != "" else OS.get_user_data_dir().path_join("videos")
+	if OS.get_environment("FRAMETUBE_VIDEOS") != "": # somewhere else (also used by tests)
+		dir = OS.get_environment("FRAMETUBE_VIDEOS")
 	DirAccess.make_dir_recursive_absolute(dir)
 	return dir
 
@@ -51,18 +54,21 @@ func state(id: String) -> String:
 ## Short text for the Download button for this video.
 func label(id: String, is_live := false) -> String:
 	match state(id):
-		"saved": return "Saved"
+		"saved":
+			var s := link.send_label(id) if link else ""
+			return s if s != "" else "Saved"
 		"downloading": return "Saving %d%%" % int(current.get("percent", 0.0))
 		"queued": return "Queued"
 	return "Can't save live" if is_live else "Download"
 
 
 ## info: the resolved video (YouTube.resolve); projection: what the user is watching it as.
-func add(url: String, info: Dictionary, height: int, projection := -1) -> void:
+## send_to: another device's id (DeviceLink) = download here, then move it there.
+func add(url: String, info: Dictionary, height: int, projection := -1, send_to := "") -> void:
 	var id := Store.video_id(url)
 	if id == "" or state(id) != "":
 		return
-	queue.append({"id": id, "url": url, "height": height, "info": info, "projection": projection})
+	queue.append({"id": id, "url": url, "height": height, "info": info, "projection": projection, "send_to": send_to})
 	_next()
 	changed.emit()
 
@@ -82,6 +88,8 @@ func cancel(id: String) -> void:
 func remove(id: String) -> void:
 	if not items.has(id):
 		return
+	if link:
+		link.cancel_send(id)
 	var f: String = items[id].file
 	_remove_file(f, 10)
 	for t in items[id].get("subs", []):
@@ -123,8 +131,11 @@ func _local_subs(e: Dictionary) -> Array:
 func list() -> Array:
 	var out := []
 	for e in items.values():
+		var where := "Saved on this device"
+		if link and str(e.get("send_to", "")) != "":
+			where = link.send_detail(e.id)
 		out.append({"id": e.id, "url": e.url, "title": e.title, "duration": e.duration, "channel": e.channel,
-			"views": e.views, "description": "Saved on this device · " + size_text(e.bytes), "added": e.added})
+			"views": e.views, "description": where + " · " + size_text(e.bytes), "added": e.added})
 	out.sort_custom(func(a, b): return a.added > b.added)
 	return out
 
@@ -276,16 +287,57 @@ func _finished(job: Dictionary, path: String, error: String) -> void:
 			"width": int(info.get("width", 0)), "height": int(info.get("height", 0)), "fps": float(info.get("fps", 30.0)),
 			"vcodec": str(info.get("vcodec", "")), "projection": int(job.projection), "age_limit": int(info.get("age_limit", 0)),
 			"file": path, "bytes": _file_size(path), "added": int(Time.get_unix_time_from_system()), "subs": []}
+		if str(job.get("send_to", "")) != "":
+			items[id].send_to = job.send_to
+			items[id].send_move = true
 		_save()
 		changed.emit()
 		var n := await _save_subs(id, pick_subs(info.get("subs", []), save_langs, str(info.get("language", ""))))
 		if not items.has(id): # deleted while the subtitles were saving
 			_next()
 			return
-		done.emit(id, true, "Saved \"%s\" for offline watching (%s%s)." % [items[id].title, size_text(items[id].bytes),
-			"" if n == 0 else ", %d subtitle track%s" % [n, "" if n == 1 else "s"]])
+		var subs_txt := "" if n == 0 else ", %d subtitle track%s" % [n, "" if n == 1 else "s"]
+		if str(items[id].get("send_to", "")) != "" and link:
+			done.emit(id, true, "Downloaded \"%s\" (%s%s). Sending it to %s next." % [items[id].title,
+				size_text(items[id].bytes), subs_txt, link.peer_name(items[id].send_to)])
+		else:
+			done.emit(id, true, "Saved \"%s\" for offline watching (%s%s)." % [items[id].title, size_text(items[id].bytes), subs_txt])
 	changed.emit()
 	_next()
+
+
+# --- Moving videos between devices (DeviceLink) ---------------------------------------------------------
+
+## Send a saved video to another device. move = delete it here once it's arrived.
+func mark_send(id: String, to: String, move: bool) -> void:
+	if not items.has(id):
+		return
+	items[id].send_to = to
+	items[id].send_move = move
+	_save()
+	changed.emit()
+
+
+func clear_send(id: String) -> void:
+	if items.has(id):
+		items[id].erase("send_to")
+		items[id].erase("send_move")
+		_save()
+		changed.emit()
+
+
+## A video another device sent here (already checked and written by DeviceLink).
+func import_item(info: Dictionary, file: String, subs: Array) -> void:
+	var id := str(info.id)
+	items[id] = {"id": id, "url": "https://www.youtube.com/watch?v=" + id,
+		"title": str(info.get("title", id)).left(200), "channel": str(info.get("channel", "")).left(100),
+		"views": int(info.get("views", 0)), "duration": float(info.get("duration", 0.0)),
+		"width": int(info.get("width", 0)), "height": int(info.get("height", 0)), "fps": float(info.get("fps", 30.0)),
+		"vcodec": str(info.get("vcodec", "")).left(20), "projection": int(info.get("projection", -1)),
+		"age_limit": int(info.get("age_limit", 0)), "file": file, "bytes": _file_size(file),
+		"added": int(Time.get_unix_time_from_system()), "subs": subs}
+	_save()
+	changed.emit()
 
 
 ## The tracks to keep for the chosen languages.

@@ -19,7 +19,12 @@ const TIPS := [5, 10, 15, 20, 25]
 var side := "left"
 var grip: XRNode3D # follows the controller's grip pose (see setup)
 var tracker_name: StringName
+## Settings choice: what to draw. "Hands" also covers the hand pose the runtime works out from a
+## held controller (finger sensing), so "Hands only" still shows a hand while holding one.
+const MODES := ["Hands + controllers", "Hands only", "Controllers only", "Nothing"]
 var shown := true
+var show_hands := true
+var show_controllers := true
 
 var _ctrl_root: Node3D # stand-in + runtime model, under `grip`
 var _fallback: Node3D
@@ -54,11 +59,17 @@ func setup(p_side: String, p_grip: XRNode3D) -> void:
 	_build_hand()
 
 
+func set_mode(m: int) -> void:
+	show_hands = m == 0 or m == 1
+	show_controllers = m == 0 or m == 2
+	set_shown(show_hands or show_controllers)
+
+
 func set_shown(on: bool) -> void:
 	shown = on
 	visible = on
 	if _ctrl_root:
-		_ctrl_root.visible = on
+		_ctrl_root.visible = on and show_controllers
 
 
 func set_accent(c: Color) -> void:
@@ -73,12 +84,12 @@ func _process(_delta: float) -> void:
 		return
 	var ht := XRServer.get_tracker(tracker_name) as XRHandTracker
 	var hand_on := ht != null and ht.has_tracking_data
-	_hand_root.visible = hand_on
-	if hand_on:
+	_hand_root.visible = hand_on and show_hands
+	if _hand_root.visible:
 		_update_hand(ht)
 	# An optically tracked hand means the controller isn't in it (it'd be drawn on top of your fingers).
 	var optical := hand_on and ht.hand_tracking_source == XRHandTracker.HAND_TRACKING_SOURCE_UNOBSTRUCTED
-	_ctrl_root.visible = not optical
+	_ctrl_root.visible = show_controllers and not optical
 	_fallback.visible = _render_models == 0 # the runtime's real model wins
 
 

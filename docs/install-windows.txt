@@ -40,10 +40,12 @@ HOW TO USE IT (in VR)
   Thumbstick click .................. re-center everything in front of you
                                       (also calls the fidget toy back)
 
-Settings has options to show your hands and controllers, and to make the fidget toy
-stay where you leave it (or fall to the floor) instead of floating back.
+Settings lets you choose what you see of yourself (hands, controllers, both or nothing),
+and whether the fidget toy floats back, stays where you leave it, or falls to the floor.
 
-Tap a "Discover" topic to find something to watch without typing.
+Tap a "Discover" topic to find something to watch without typing. After a search, press
+"+ Save" to add it as a topic; "Edit" removes topics (Settings can bring the originals back).
+Lists keep loading more videos as you scroll down.
 Videos remember where you stopped: find them under "Continue watching".
 Want to watch without internet? Press "Download" on a search result or while a video plays;
 it shows up under "Downloads"
@@ -51,6 +53,21 @@ it shows up under "Downloads"
 
 Without a headset FrameTube opens in a normal window: click to use the menu,
 hold the right mouse button and move to look around, Tab shows/hides the menu.
+
+
+SEND VIDEOS TO YOUR STEAM FRAME
+-------------------------------
+Want to take videos with you and watch them on the Frame without the PC?
+1. Install FrameTube on the Frame too (see its own guide), on the same Wi-Fi as this PC.
+2. Open FrameTube on both. In Settings, "Save downloads to" now offers "Steam Frame".
+3. Downloads then happen on the PC (faster) and are sent to the Frame over Wi-Fi.
+   If the Frame's FrameTube isn't open, they wait and go the next time both are open.
+   (While you're streaming from the PC, the Frame's own FrameTube can't be open. So leave
+   FrameTube running on the PC, stop streaming, and start FrameTube on the Frame itself:
+   the waiting videos arrive within a minute.)
+   In "Downloads", "Send to Frame" sends a copy of something you've already saved.
+The first time, the Frame asks "Allow videos from <your PC>?": press Allow.
+Windows may ask whether FrameTube can use the network: allow it on private networks.
 
 
 IF SOMETHING GOES WRONG
@@ -71,3 +88,11 @@ Close FrameTube, then delete the file "settings.cfg" in FrameTube's data folder:
                 (paste that into the address bar of a File Explorer window)
   Steam Frame:  ~/.local/share/godot/app_userdata/FrameTube   (in Desktop Mode)
 This removes the PIN and resets FrameTube's settings. Your watch history is kept.
+
+
+ABOUT
+-----
+FrameTube is free and open source (MIT license, see LICENSE.txt). It's an independent
+project, not made or endorsed by YouTube, Google or Valve. Videos belong to their creators:
+download only for your own offline viewing. See "Third-party notices.txt" for the programs
+FrameTube downloads and uses (yt-dlp, FFmpeg, Deno).

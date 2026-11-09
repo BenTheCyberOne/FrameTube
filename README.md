@@ -1,6 +1,12 @@
+<p align="center"><img src="docs/logo.png" width="128" alt="FrameTube logo"></p>
+
 # FrameTube
 
 Watch YouTube and YouTube VR videos (360°, 180°, 3D) in your Steam Frame, or on a big virtual screen.
+Free and open source ([MIT](LICENSE)).
+
+> FrameTube is an independent project. It isn't affiliated with, endorsed by or sponsored by YouTube, Google
+> or Valve. See [Third-party notices](THIRD_PARTY_NOTICES.md) and [License & credits](#license--credits).
 
 ## Quick start (no technical knowledge needed)
 
@@ -45,7 +51,7 @@ FrameTube needs yt-dlp (finds the video streams), ffmpeg (decodes them) and Deno
 YouTube's player code). **The app installs them itself** (`scripts/setup.gd`). On first run (or **Settings >
 Repair**) it downloads the right builds for the platform from their official GitHub releases, checks them against
 the published SHA-256 checksums, extracts just the executable, and puts it in the app's data folder (`user://bin`:
-`%APPDATA%\Godotpp_userdata\FrameTubein` on Windows, `~/.local/share/godot/app_userdata/FrameTube/bin` on
+`%APPDATA%\Godot\app_userdata\FrameTube\bin` on Windows, `~/.local/share/godot/app_userdata/FrameTube/bin` on
 Linux). yt-dlp updates itself every 3 days in the background, and once more automatically if a video fails in a
 way that suggests YouTube changed something.
 
@@ -61,7 +67,7 @@ win over the managed ones. Both folders are gitignored.
 ## Building releases
 
 ```
-python tools/build_release.py C:\path	o\godotconsole.exe
+python tools/build_release.py C:\path\to\godotconsole.exe
 ```
 This exports the Windows, Steam Frame (Linux arm64) and Linux x86_64 presets (Godot 4.7 export templates needed)
 and writes `build/release/FrameTube-<platform>-v<version>.zip`, each with its plain-language install guide. The
@@ -95,10 +101,11 @@ The menu remembers its size and where you put it relative to your view, so it op
 you're facing. **Settings > Menu size** steps through Small / Normal / Large / Extra large and puts a moved menu
 back in front of you. Desktop: Ctrl+scroll over the menu resizes it, Ctrl+left-drag moves it.
 
-**Hands and controllers** (Settings > Show hands and controllers, on by default): your controllers are drawn
-in your hands, using the headset's own controller model when the runtime provides one (OpenXR render models)
-and a plain stand-in otherwise. Put the controllers down and, with hand tracking, your hands are drawn from
-the tracked joints instead.
+**Hands and controllers** (Settings > Show in VR: *Hands + controllers* (default), *Hands only*,
+*Controllers only* or *Nothing*): controllers are drawn using the headset's own controller model when the
+runtime provides one (OpenXR render models) and a plain stand-in otherwise. Hands are drawn from the tracked
+joints: optical hand tracking when the controllers are put down, or the hand pose the runtime works out from a
+held controller. An optically tracked hand hides its controller, so it isn't drawn over your fingers.
 
 ### Moving and resizing the screen (flat videos)
 
@@ -116,9 +123,15 @@ page takes over on first run while the helpers download (progress bar, "Try agai
 
 - **Startup list**: "Continue watching" if you've watched something before, otherwise a Discover topic, so
   there's always something to tap. In VR the keyboard appears only when you tap the search box.
-- **Search / URL**, the **Discover** topics (VR180 3D, 360 nature, Roller coasters, Space, Underwater,
-  Concerts, Relax), plus **Continue watching** (resume points), **Subscriptions**, **Watch later** and
-  **For you**. The last three need an account.
+- **Search / URL**, the **Discover** topics, plus **Continue watching** (resume points), **Subscriptions**,
+  **Watch later** and **For you**. The last three need an account.
+- **Discover topics** are pills with a badge for the kind of video they find (VR180, 360°, 2D): Travel,
+  Concerts, Nature, Roller coasters, Space, Underwater and Relax to start with. After a search, **+ Save "…"**
+  adds it as a topic (its badge is guessed from the words); **Edit** turns the pills into × buttons that
+  remove them. Settings > *Discover topics* hides the row, and *Original topics* brings back the defaults.
+- **Infinite scrolling**: searches and feeds load 20 videos at first, then 20 more whenever you scroll near
+  the bottom (yt-dlp `-I start:end`), skipping any repeats, until YouTube runs out. The status line counts
+  them and says how many the family filter hid.
 - **The menu tucks itself away** 3 s after a video starts (unless you're using it). The first time, a hint says
   how to bring it back.
 - **Errors in plain words**: age-restricted, private, members-only, unavailable, no internet, sign-in needed.
@@ -128,11 +141,13 @@ page takes over on first run while the helpers download (progress bar, "Try agai
   description snippet. (Search results don't include upload dates, so there are none.)
 - **Settings page** (scrolls), in sections:
   - *Watching*: Resume videos, When a video ends (Stop / Replay / Play next in the list), Hide the menu while
-    watching, Menu size (Small / Normal / Large / Extra large, or any size by gripping the menu).
+    watching, Discover topics, Original topics, Menu size (Small / Normal / Large / Extra large, or any size by
+    gripping the menu), Screen shape, Subtitle size, Saved videos, Save downloads to, Receive videos from other
+    devices, Subtitles to save.
   - *Safety & account*: **Family-friendly filter** (on by default), YouTube account, Clear watch history (press
     twice).
-  - *Room & look*: Room, Fidget toy, When you let go of the toy, Vibration, Show hands and controllers,
-    Colour theme, Ambient glow, Glow effects.
+  - *Room & look*: Room, Fidget toy, When you let go of the toy, Vibration, Show in VR (hands /
+    controllers), Colour theme, Ambient glow, Glow effects.
   - *Advanced*: Video decoding, Repair (re-downloads the helpers), version info.
 - **Volume** slider in the player controls (desktop: ↑/↓), remembered between sessions.
 - **Subtitles** (player row): cycles Off and the video's tracks: every human-made one, plus auto-generated
@@ -184,6 +199,8 @@ page takes over on first run while the helpers download (progress bar, "Try agai
   (all, the video's own language, and/or specific ones; none at all is fine too). Cards in the Downloads list
   have a **Delete** button (press it, then **Sure?**). Live streams can't be saved. Downloading is for your own offline viewing: respect
   creators' rights and YouTube's terms.
+- **Sending videos between devices** (`scripts/link.gd`): FrameTube on the PC and on the Frame find each
+  other on the home network and can move saved videos across. See [below](#sending-videos-between-devices).
 - Player row: **Video type** (auto-detected; cycle it if a video looks wrong), **Screen** size + **Reset**,
   **Quality** (Auto / HD / 2K / 4K / 5.7K / 8K maximum), **Swap eyes**.
   - **Auto** (the default) shows what it picked, e.g. "Auto (8K)". 360°/180° videos spread their pixels all
@@ -223,10 +240,44 @@ there are no asset files.
   floor). Recenter calls it back to its spot in any mode.
 
 Remembered between sessions: environment, toy, accent, bias lighting, bloom, quality, screen size, decoder,
-swap eyes, account, the last 60 videos with their
+swap eyes, account, Discover topics, the last 500 videos with their
 resume positions (it resumes automatically after the first 15 seconds of a video, and not in the last 15
 seconds), and any projection you picked by hand for a specific video. They're stored in Godot's user data
 folder (`%APPDATA%\Godot\app_userdata\FrameTube` on Windows) as `settings.cfg` and `history.json`.
+
+## Sending videos between devices
+
+The Frame plays 4K smoothly by itself, but downloading is faster on the PC, and while you stream from the PC
+the Frame's own FrameTube isn't running. So:
+
+- **Settings > Save downloads to** cycles *This PC* and the other FrameTubes it has seen (Steam Frames first).
+  With a device picked, a download runs here, then the file is **moved** there. With Auto quality, downloads
+  for a Steam Frame are capped at 4K, which it plays smoothly on its own.
+- In **Downloads**, a second button **Send to Frame / Send to PC** sends a **copy**. While a video is on its way
+  that button shows *Waiting for Frame*, *Allow it there* or *Sending 42%*; pressing it stops sending.
+- Transfers wait until both devices are open on the same network and then start by themselves. The PC can be
+  left running in its desktop window while you start FrameTube on the Frame.
+
+How it works:
+- **Discovery**: every copy broadcasts a small JSON "I'm here" on UDP port 47811 every 2.5 s (to
+  255.255.255.255 and each private network's .255 address) and listens for the others. Devices it has seen are
+  remembered with their last address, which is tried every 20 s even without a broadcast. If a device comes
+  back with a new identity (FrameTube reinstalled), the old entry is replaced.
+- **Transfer**: TCP to the receiver's port (47812, or the next free one). The sender sends one JSON line (who it
+  is, its secret for this receiver, the video's details, and the file list with sizes), then the bytes. The
+  receiver sends one JSON line back before and after. It runs on a worker thread on the sending side, and
+  8 MB per frame on the receiving side, so playback isn't disturbed.
+- **Trust**: the first time a device sends, the receiver shows **"Allow videos from …?"** at the top of the menu
+  (and opens the menu). With a parental lock, Allow needs the PIN. The sender picks a random 128-bit secret
+  per receiver; once allowed, the receiver only accepts that device with that secret. *Not now* refuses it
+  until FrameTube restarts. At most 3 unknown devices can be waiting for an answer.
+- **What's accepted**: one video (mkv / mp4 / webm / mov / m4v) plus subtitle `.json3` files of up to 16 MB, only
+  if there's room (plus 300 MB to spare), only for a valid YouTube id that isn't already saved. Files are
+  written as `.part` and renamed when complete, under names the receiver makes up itself (sanitized title plus
+  id) in its own Downloads folder. A transfer that stops part-way is deleted and sent again later. Received
+  videos keep their age limit, so the family filter still applies.
+- Settings > **Receive videos from other devices** turns receiving off; it also forgets the devices you'd
+  allowed. Sending always works.
 
 ## Projections
 
@@ -259,6 +310,16 @@ It logs engine stats every second: position, frames shown, queue depths, and A/V
 audio is ahead). It also saves screenshots and doesn't touch your real settings or history unless you pass
 `--persist`.
 
+Other test hooks (after `--`): `--search=<q> --scroll-test=N` (scrolls to the bottom N times and checks for
+repeats), `--topics-test`, `--rig-test` (menu, toy and hands), `--pin-test`, `--langs-test`, and the device link:
+```
+# receiver                                       # sender (another copy of the project, so user:// differs)
+FRAMETUBE_VIDEOS=<dirB> godot --path projB ...   FRAMETUBE_VIDEOS=<dirA> godot --path projA ...
+  -- --link-test --link-port=47900 --link-allow    -- --link-test --link-port=47910 --link-send=<file>
+                                                    [--link-peer=127.0.0.1:47900 --link-no-discovery] [--link-move]
+```
+`FRAMETUBE_VIDEOS` points the Downloads folder somewhere else.
+
 ## Known limitations / next steps
 
 - **GPU decoding** is on by default. ffmpeg tries `-hwaccel vulkan`, then `d3d11va` (Windows only), then the CPU,
@@ -279,3 +340,21 @@ audio is ahead). It also saves screenshots and doesn't touch your real settings 
   joins mid-playback, trimmed so it stays in sync (measured within ±12 ms). Seeking restarts ffmpeg (~1–2 s).
 - The Frame's controllers go through SteamVR's bindings for Godot's default action map. If a button doesn't
   respond, remap it in the SteamVR controller bindings for the app.
+
+## License & credits
+
+FrameTube is released under the [MIT License](LICENSE): free to use, change and share, including in your own
+projects, as long as the copyright notice comes along.
+
+- Built with [Godot Engine](https://godotengine.org) (MIT).
+- On first run it downloads [yt-dlp](https://github.com/yt-dlp/yt-dlp) (Unlicense),
+  [FFmpeg](https://ffmpeg.org) ([BtbN builds](https://github.com/BtbN/FFmpeg-Builds), GPL) and
+  [Deno](https://deno.com) (MIT). They aren't part of this repository or the releases; FrameTube runs them as
+  separate programs. Details in [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).
+
+**Disclaimer.** FrameTube is an independent, unofficial project. It isn't affiliated with, endorsed by or
+sponsored by YouTube, Google, Valve or Steam; those names are trademarks of their owners and appear only to
+describe what the app works with. FrameTube doesn't host or distribute videos: they're streamed from YouTube
+and belong to their creators. Using a third-party YouTube client may go against YouTube's terms of service,
+which is between you and YouTube. Download only for your own offline viewing, and respect creators' rights.
+The software is provided "as is", without warranty of any kind (see the license).

@@ -10,7 +10,8 @@ config/features=PackedStringArray("4.7", "Mobile")
 config/icon="res://icon.svg"
 config/version="0.1.0"
 boot_splash/bg_color=Color(0.055, 0.06, 0.085, 1)
-boot_splash/show_image=false
+boot_splash/image="res://splash.png"
+boot_splash/fullsize=false
 
 [display]
 

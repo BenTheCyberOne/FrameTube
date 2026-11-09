@@ -22,13 +22,19 @@ signal screen_size_pressed
 signal reset_screen_pressed
 signal setting_pressed(key: String) # "environment" | "toy" | "accent" | "bias" | "bloom" | "repair"
 signal discover_pressed(query: String)
+signal topic_remove(index: int) # Edit mode: a topic was tapped
+signal topic_save # "+ Save search"
+signal topic_edit # Edit / Done
 signal setup_retry_pressed
 
 const KEY_ROWS := ["1234567890-", "qwertyuiop=", "asdfghjkl:/", "zxcvbnm.?&_"]
-## One-tap topics so nobody has to type to find something to watch: [label, search query]
-const DISCOVER := [["VR180 3D", "vr180 3d travel experience"], ["360 nature", "360 video nature 8k"],
-	["Roller coasters", "360 roller coaster pov"], ["Space", "360 vr space earth"],
-	["Underwater", "360 underwater vr"], ["Concerts", "vr180 concert live"], ["Relax", "4k relaxing scenery"]]
+## One-tap topics so nobody has to type to find something to watch: [label, search query, kind].
+## kind ("360", "180", "flat", "") is shown as a small badge. Users can remove these and save their own.
+const DISCOVER := [["Travel", "vr180 3d travel experience", "180"], ["Concerts", "vr180 concert live", "180"],
+	["Nature", "360 video nature 8k", "360"], ["Roller coasters", "360 roller coaster pov", "360"],
+	["Space", "360 vr space earth", "360"], ["Underwater", "360 underwater vr", "360"],
+	["Relax", "4k relaxing scenery", "flat"]]
+const TOPIC_BADGES := {"360": "360°", "180": "VR180", "flat": "2D"}
 const QUALITY_NAMES := {0: "Auto", 1080: "HD", 1440: "2K", 2160: "4K", 2880: "5.7K", 4320: "8K"}
 
 var auto_keyboard := false # VR: show the on-screen keyboard whenever the search box is focused
@@ -46,6 +52,15 @@ var thumbs: Thumbs
 ## id -> label for a card's Download button ("Download", "Saving 45%", "Saved", ...). Set by main.
 var card_download_text: Callable
 var _card_dl := {} # video id -> that card's Download button
+## id -> label for a card's second button ("Send to Steam Frame"), "" = no such button. Set by main.
+var card_send_text: Callable
+var _card_send := {}
+signal result_send(index: int)
+signal results_near_end # scrolled close to the bottom of the list: time to load more
+## "Allow videos from <device>?" bar under the header
+var ask_bar: PanelContainer
+var ask_label: Label
+signal ask_answered(allow: bool)
 var status_label: Label
 var title_label: Label
 var clock_label: Label
@@ -66,6 +81,7 @@ var setup_bar: ProgressBar
 var setup_retry: Button
 var about_label: Label
 var settings_list: VBoxContainer
+var topics_box: HFlowContainer # Browse: "Discover" topic pills
 var subs_btn: Button
 var speed_btn: Button
 var download_btn: Button
@@ -104,6 +120,13 @@ func _ready() -> void:
 	var header := HBoxContainer.new()
 	header.add_theme_constant_override("separation", 10)
 	root.add_child(header)
+	var mark := TextureRect.new()
+	mark.texture = load("res://icon.svg")
+	mark.expand_mode = TextureRect.EXPAND_IGNORE_SIZE
+	mark.stretch_mode = TextureRect.STRETCH_KEEP_ASPECT_CENTERED
+	mark.custom_minimum_size = Vector2(50, 50)
+	mark.size_flags_vertical = SIZE_SHRINK_CENTER
+	header.add_child(mark)
 	var logo := Label.new()
 	logo.text = "FrameTube"
 	logo.add_theme_font_size_override("font_size", 34)
@@ -157,17 +180,11 @@ func _ready() -> void:
 		b.theme_type_variation = &"ChipButton"
 		feeds.add_child(b)
 
-	var disc := HBoxContainer.new()
-	disc.add_theme_constant_override("separation", 8)
-	browse_page.add_child(disc)
-	var dl := Label.new()
-	dl.text = "Discover"
-	dl.add_theme_color_override("font_color", TEXT_DIM)
-	disc.add_child(dl)
-	for d in DISCOVER:
-		var b := _button(d[0], discover_pressed.emit.bind(d[1]))
-		b.theme_type_variation = &"ChipButton"
-		disc.add_child(b)
+	topics_box = HFlowContainer.new() # wraps onto a second line when there are many
+	topics_box.add_theme_constant_override("h_separation", 8)
+	topics_box.add_theme_constant_override("v_separation", 8)
+	browse_page.add_child(topics_box)
+	set_topics(DISCOVER, false, "")
 
 	# Results: two columns of video cards in a scroll area (thumbstick / mouse wheel scrolls it).
 	results_scroll = ScrollContainer.new()
@@ -180,6 +197,7 @@ func _ready() -> void:
 	results_grid.add_theme_constant_override("h_separation", 12)
 	results_grid.add_theme_constant_override("v_separation", 12)
 	results_scroll.add_child(results_grid)
+	results_scroll.get_v_scroll_bar().value_changed.connect(func(_v): _check_near_end())
 	thumbs = Thumbs.new()
 	add_child(thumbs)
 
@@ -202,10 +220,14 @@ func _ready() -> void:
 	_setting_row("resume", "Resume videos", "Start where you stopped last time")
 	_setting_row("end_action", "When a video ends", "Stop, play it again, or play the next video in the list")
 	_setting_row("autohide", "Hide the menu while watching", "Tucks the menu away a few seconds after a video starts")
+	_setting_row("topics", "Discover topics", "The one-tap searches above the video list. Save your own with \"+ Save\" after searching")
+	_setting_row("topics_reset", "Original topics", "Bring back the topics FrameTube came with (replaces your list)")
 	_setting_row("menu_size", "Menu size", "Press for preset sizes. Or squeeze grip on the menu to move it; grip it with both hands and pull apart / push together for any size")
 	_setting_row("curve", "Screen shape", "Curve the screen around you, like a cinema")
 	_setting_row("subs_size", "Subtitle size", "How big subtitles are")
 	_setting_row("downloads", "Saved videos", "Videos you pressed Download on. Press to open their folder")
+	_setting_row("save_to", "Save downloads to", "Here, or your Steam Frame: downloads here, then goes over Wi-Fi once FrameTube is open on both")
+	_setting_row("link_receive", "Receive videos from other devices", "Let FrameTube on your other devices send videos here. You'll be asked once per device")
 	_setting_row("subs_save", "Subtitles to save", "Which subtitle languages are kept with downloaded videos")
 	lang_box = HFlowContainer.new()
 	lang_box.add_theme_constant_override("h_separation", 8)
@@ -224,7 +246,7 @@ func _ready() -> void:
 	_setting_row("toy", "Fidget toy", "Grab it with the grip button, throw it, or swipe it to spin")
 	_setting_row("toy_mode", "When you let go of the toy", "It floats back to its spot, stays where you leave it, or falls to the floor. Recenter calls it back")
 	_setting_row("haptics", "Vibration", "Controllers buzz when you touch the toy")
-	_setting_row("hands", "Show hands and controllers", "See your controllers, or your hands when you put the controllers down")
+	_setting_row("hands", "Show in VR", "Your hands, your controllers, both or neither")
 	_setting_row("accent", "Colour theme", "Colour of the menu, lights and toy")
 	_setting_row("bias", "Ambient glow", "The video's colours softly light up the room")
 	_setting_row("bloom", "Glow effects", "Turn off if things feel slow")
@@ -320,6 +342,27 @@ func _ready() -> void:
 	status_label.max_lines_visible = 2
 	root.add_child(status_label)
 	root.move_child(status_label, player_box.get_index())
+
+	ask_bar = PanelContainer.new()
+	ask_bar.add_theme_stylebox_override("panel", _sb(Color(1, 1, 1, 0.07), 14, accent, 2, 12))
+	ask_bar.visible = false
+	var ask_row := HBoxContainer.new()
+	ask_row.add_theme_constant_override("separation", 12)
+	ask_bar.add_child(ask_row)
+	ask_label = Label.new()
+	ask_label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	ask_label.size_flags_horizontal = SIZE_EXPAND_FILL
+	ask_label.custom_minimum_size.x = 50
+	ask_row.add_child(ask_label)
+	var allow := _button("Allow", func(): ask_answered.emit(true))
+	allow.theme_type_variation = &"AccentButton"
+	allow.custom_minimum_size.x = 140
+	ask_row.add_child(allow)
+	var deny := _button("Not now", func(): ask_answered.emit(false))
+	deny.custom_minimum_size.x = 140
+	ask_row.add_child(deny)
+	root.add_child(ask_bar)
+	root.move_child(ask_bar, 1) # right under the header, on every page
 
 	var seek_row := HBoxContainer.new()
 	player_box.add_child(seek_row)
@@ -531,6 +574,11 @@ func apply_accent(c: Color) -> void:
 	th.set_color("caret_color", "LineEdit", accent)
 
 	# Video cards
+	th.set_type_variation("PillButton", "Button") # see-through button over a Discover pill
+	th.set_stylebox("normal", "PillButton", StyleBoxEmpty.new())
+	th.set_stylebox("hover", "PillButton", _sb(accent * Color(1, 1, 1, 0.18), 30, accent, 2, 0))
+	th.set_stylebox("pressed", "PillButton", _sb(accent * Color(1, 1, 1, 0.32), 30, accent, 2, 0))
+	th.set_stylebox("hover_pressed", "PillButton", _sb(accent * Color(1, 1, 1, 0.32), 30, accent, 2, 0))
 	th.set_type_variation("CardButton", "Button")
 	th.set_stylebox("normal", "CardButton", StyleBoxEmpty.new()) # the card panel underneath draws the resting look
 	th.set_stylebox("hover", "CardButton", _sb(accent * Color(1, 1, 1, 0.14), 18, accent, 2, 0))
@@ -652,6 +700,7 @@ func set_setting(key: String, value: String) -> void:
 func show_results(items: Array) -> void:
 	thumbs.cancel_pending()
 	_card_dl.clear()
+	_card_send.clear()
 	for c in results_grid.get_children():
 		c.queue_free()
 	for i in items.size():
@@ -660,8 +709,20 @@ func show_results(items: Array) -> void:
 	show_page(false)
 
 
+## More cards at the end of the list (infinite scrolling). first_index: index of items[0] overall.
+func append_results(items: Array, first_index: int) -> void:
+	for i in items.size():
+		results_grid.add_child(_make_card(items[i], first_index + i))
+
+
+func _check_near_end() -> void:
+	var sb := results_scroll.get_v_scroll_bar()
+	if results_grid.get_child_count() > 0 and sb.max_value - (sb.value + sb.page) < 700.0:
+		results_near_end.emit()
+
+
 const THUMB := Vector2(240, 135)
-const DL_W := 140.0 # width of a card's Download button
+const DL_W := 165.0 # width of a card's Download button
 
 ## One result: [thumbnail with VR badges / duration / live tag / resume bar] [title, channel · views, snippet]
 ## The card is a PanelContainer (so it grows to fit its content) with a transparent Button stacked on
@@ -767,25 +828,43 @@ func _make_card(it: Dictionary, index: int) -> PanelContainer:
 	hit.focus_mode = FOCUS_NONE
 	hit.pressed.connect(func(): result_chosen.emit(index))
 	card.add_child(hit)
-	# Download button in the card's bottom-right corner, above the card button so it gets its own clicks.
+	# Download button on the card's right edge, above the card button so it gets its own clicks;
+	# in the Downloads list a "Send to ..." button can sit above it.
 	if has_dl:
 		var layer := Control.new()
 		layer.mouse_filter = MOUSE_FILTER_IGNORE
 		card.add_child(layer)
+		var col := VBoxContainer.new()
+		col.add_theme_constant_override("separation", 8)
+		col.mouse_filter = MOUSE_FILTER_IGNORE
+		# Right edge, vertically centred.
+		col.anchor_left = 1.0
+		col.anchor_right = 1.0
+		col.anchor_top = 0.5
+		col.anchor_bottom = 0.5
+		col.grow_horizontal = Control.GROW_DIRECTION_BEGIN
+		col.grow_vertical = Control.GROW_DIRECTION_BOTH
+		layer.add_child(col)
+		var send_text: String = card_send_text.call(id) if card_send_text.is_valid() else ""
+		if send_text != "":
+			var sb := _button(send_text, func(): result_send.emit(index))
+			sb.theme_type_variation = &"ChipButton"
+			sb.add_theme_font_size_override("font_size", 19)
+			sb.text_overrun_behavior = TextServer.OVERRUN_TRIM_ELLIPSIS
+			sb.custom_minimum_size = Vector2(DL_W, 52)
+			sb.size.x = DL_W
+			col.add_child(sb)
+			_card_send[id] = sb
 		var dl := _button(card_download_text.call(id) if card_download_text.is_valid() else "Download",
 			func(): result_download.emit(index))
 		dl.theme_type_variation = &"ChipButton"
 		dl.add_theme_font_size_override("font_size", 19)
 		dl.tooltip_text = "Save to watch without internet"
+		dl.text_overrun_behavior = TextServer.OVERRUN_TRIM_ELLIPSIS
 		dl.custom_minimum_size.x = DL_W
-		# Right edge, vertically centred.
-		dl.anchor_left = 1.0
-		dl.anchor_right = 1.0
-		dl.anchor_top = 0.5
-		dl.anchor_bottom = 0.5
-		dl.grow_horizontal = Control.GROW_DIRECTION_BEGIN
-		dl.grow_vertical = Control.GROW_DIRECTION_BOTH
-		layer.add_child(dl)
+		if send_text != "":
+			dl.custom_minimum_size.y = 52
+		col.add_child(dl)
 		_card_dl[id] = dl
 	return card
 
@@ -808,6 +887,19 @@ func refresh_card_downloads() -> void:
 	for id in _card_dl:
 		if is_instance_valid(_card_dl[id]):
 			_card_dl[id].text = card_download_text.call(id)
+	if card_send_text.is_valid():
+		for id in _card_send:
+			if is_instance_valid(_card_send[id]):
+				_card_send[id].text = card_send_text.call(id)
+
+
+func show_ask(text: String) -> void:
+	ask_label.text = text
+	ask_bar.visible = true
+
+
+func hide_ask() -> void:
+	ask_bar.visible = false
 
 
 ## Small rounded label: durations, LIVE, VR/resolution badges.
@@ -888,6 +980,8 @@ func _setting_row(key: String, title: String, hint: String) -> void:
 	h.text = hint
 	h.add_theme_font_size_override("font_size", 21)
 	h.add_theme_color_override("font_color", TEXT_DIM)
+	h.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART # a long hint wraps instead of pushing the button off the menu
+	h.custom_minimum_size.x = 50
 	labels.add_child(h)
 	row.add_child(labels)
 	var b := _button("-", _on_setting.bind(key))
@@ -1000,3 +1094,69 @@ static func _fmt(t: float) -> String:
 	if s >= 3600:
 		return "%d:%02d:%02d" % [s / 3600, (s / 60) % 60, s % 60]
 	return "%d:%02d" % [s / 60, s % 60]
+
+
+# --- Discover topics -----------------------------------------------------------------------------------
+
+## topics: [[label, query, kind], ...]; editing: tapping removes; save_label: "" = no "+ Save" pill.
+func set_topics(topics: Array, editing: bool, save_label: String) -> void:
+	for c in topics_box.get_children():
+		c.queue_free()
+	var head := Label.new()
+	head.text = "Discover"
+	head.add_theme_color_override("font_color", TEXT_DIM)
+	head.custom_minimum_size.y = 58
+	head.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
+	topics_box.add_child(head)
+	for i in topics.size():
+		var t: Array = topics[i]
+		var cb := topic_remove.emit.bind(i) if editing else discover_pressed.emit.bind(t[1])
+		topics_box.add_child(_topic_pill(str(t[0]), str(t[2]) if t.size() > 2 else "", editing, cb))
+	if save_label != "" and not editing:
+		var sv := _button("+ Save \"%s\"" % save_label, func(): topic_save.emit())
+		sv.theme_type_variation = &"ChipButton"
+		sv.add_theme_color_override("font_color", accent)
+		sv.set_meta("accent_text", true)
+		sv.custom_minimum_size.y = 58
+		topics_box.add_child(sv)
+	if not topics.is_empty() or editing:
+		var ed := _button("Done" if editing else "Edit", func(): topic_edit.emit())
+		ed.theme_type_variation = &"AccentButton" if editing else &"ChipButton"
+		ed.add_theme_font_size_override("font_size", 20)
+		ed.custom_minimum_size.y = 58
+		topics_box.add_child(ed)
+
+
+## A pill: [badge] label. In edit mode: [×] label, with a red badge. A panel sized by its content,
+## with a see-through button on top (same trick as the video cards).
+func _topic_pill(label: String, kind: String, editing: bool, cb: Callable) -> Control:
+	var pill := PanelContainer.new()
+	var sb := _sb(Color(1, 1, 1, 0.045), 30, Color(1, 1, 1, 0.12), 1, 0)
+	sb.content_margin_left = 12
+	sb.content_margin_right = 18
+	sb.content_margin_top = 8
+	sb.content_margin_bottom = 8
+	pill.add_theme_stylebox_override("panel", sb)
+	pill.custom_minimum_size.y = 58
+	var row := HBoxContainer.new()
+	row.add_theme_constant_override("separation", 10)
+	pill.add_child(row)
+	var badge_text: String = "×" if editing else TOPIC_BADGES.get(kind, "")
+	if badge_text != "":
+		var col := Color(0.85, 0.25, 0.3) if editing else (accent.darkened(0.3) if kind != "flat" else Color(1, 1, 1, 0.16))
+		var chip := _chip(badge_text, col, Color.WHITE, Vector2.ZERO)
+		chip.size_flags_vertical = SIZE_SHRINK_CENTER
+		row.add_child(chip)
+	else:
+		sb.content_margin_left = 18
+	var l := Label.new()
+	l.text = label
+	l.add_theme_font_size_override("font_size", 24)
+	row.add_child(l)
+	_ignore_mouse(row)
+	var b := Button.new()
+	b.focus_mode = FOCUS_NONE
+	b.theme_type_variation = &"PillButton"
+	b.pressed.connect(cb)
+	pill.add_child(b)
+	return pill

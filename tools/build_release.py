@@ -60,6 +60,12 @@ def main() -> int:
             txt.create_system = 3
             txt.external_attr = (0o100644 << 16)  # readable by everyone
             z.writestr(txt, (ROOT / guide).read_text(encoding="utf-8").replace("\n", "\r\n"))
+            for name, src in [("LICENSE.txt", "LICENSE"), ("Third-party notices.txt", "THIRD_PARTY_NOTICES.md")]:
+                li = zipfile.ZipInfo(f"{zip_name}/{name}")
+                li.compress_type = zipfile.ZIP_DEFLATED
+                li.create_system = 3
+                li.external_attr = (0o100644 << 16)  # readable by everyone
+                z.writestr(li, (ROOT / src).read_text(encoding="utf-8").replace("\n", "\r\n"))
         print(f"   {zpath.relative_to(ROOT)}  ({zpath.stat().st_size / 1e6:.1f} MB)")
     return 0 if ok else 1
 

@@ -38,14 +38,27 @@ HOW TO USE IT
   Thumbstick click .................. re-center everything in front of you
                                       (also calls the fidget toy back)
 
-Settings has options to show your hands and controllers, and to make the fidget toy
-stay where you leave it (or fall to the floor) instead of floating back.
+Settings lets you choose what you see of yourself (hands, controllers, both or nothing),
+and whether the fidget toy floats back, stays where you leave it, or falls to the floor.
 
-Tap a "Discover" topic to find something to watch without typing.
+Tap a "Discover" topic to find something to watch without typing. After a search, press
+"+ Save" to add it as a topic; "Edit" removes topics (Settings can bring the originals back).
+Lists keep loading more videos as you scroll down.
 Videos remember where you stopped: find them under "Continue watching".
 Want to watch without internet? Press "Download" on a search result or while a video plays;
 it shows up under "Downloads"
 (press "Delete" there to remove it).
+
+
+SEND VIDEOS BETWEEN THE FRAME AND A PC
+--------------------------------------
+With FrameTube on a PC too (same Wi-Fi), the two find each other by themselves:
+- On the PC, Settings > "Save downloads to" > "Steam Frame": the PC downloads (faster),
+  then sends the video here over Wi-Fi the next time FrameTube is open on both.
+  (Leave FrameTube running on the PC while you open it here on the Frame.)
+- In "Downloads", "Send to PC" / "Send to Frame" sends a copy of a saved video.
+The first time a device sends, you're asked "Allow videos from ...?": press Allow.
+Turn this off with Settings > "Receive videos from other devices".
 
 
 IF SOMETHING GOES WRONG
@@ -65,3 +78,11 @@ Close FrameTube, then delete the file "settings.cfg" in FrameTube's data folder:
                 (paste that into the address bar of a File Explorer window)
   Steam Frame:  ~/.local/share/godot/app_userdata/FrameTube   (in Desktop Mode)
 This removes the PIN and resets FrameTube's settings. Your watch history is kept.
+
+
+ABOUT
+-----
+FrameTube is free and open source (MIT license, see LICENSE.txt). It's an independent
+project, not made or endorsed by YouTube, Google or Valve. Videos belong to their creators:
+download only for your own offline viewing. See "Third-party notices.txt" for the programs
+FrameTube downloads and uses (yt-dlp, FFmpeg, Deno).

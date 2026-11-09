@@ -1,14 +1,20 @@
 <svg xmlns="http://www.w3.org/2000/svg" width="256" height="256" viewBox="0 0 256 256">
+  <!-- FrameTube logo: a play button inside a headset-shaped frame. -->
   <defs>
-    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
-      <stop offset="0" stop-color="#5aa9ff"/>
-      <stop offset="1" stop-color="#9b6bff"/>
+    <linearGradient id="bg" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#1b2140"/>
+      <stop offset="1" stop-color="#0c0f1c"/>
+    </linearGradient>
+    <linearGradient id="accent" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#4cc3ff"/>
+      <stop offset="0.55" stop-color="#5a8cff"/>
+      <stop offset="1" stop-color="#a66bff"/>
     </linearGradient>
   </defs>
-  <rect x="8" y="8" width="240" height="240" rx="56" fill="url(#bg)"/>
-  <!-- headset visor -->
-  <path d="M52 92 h152 a20 20 0 0 1 20 20 v44 a20 20 0 0 1 -20 20 h-42 l-14 -18 a12 12 0 0 0 -20 0 l-14 18 h-42 a20 20 0 0 1 -20 -20 v-44 a20 20 0 0 1 20 -20 z"
-        fill="#0e1220" opacity="0.92"/>
-  <!-- play triangle -->
-  <path d="M112 108 L152 132 L112 156 Z" fill="#ffffff"/>
+  <rect x="0" y="0" width="256" height="256" rx="58" fill="url(#bg)"/>
+  <!-- headset frame -->
+  <path d="M60 70 H196 A30 30 0 0 1 226 100 V156 A30 30 0 0 1 196 186 H160 L146 168 A22 22 0 0 0 110 168 L96 186 H60 A30 30 0 0 1 30 156 V100 A30 30 0 0 1 60 70 Z"
+        fill="#0c0f1c" stroke="url(#accent)" stroke-width="12" stroke-linejoin="round"/>
+  <!-- play -->
+  <path d="M112 98 Q112 90 119 94 L160 120 Q166 124 160 128 L119 154 Q112 158 112 150 Z" fill="url(#accent)"/>
 </svg>

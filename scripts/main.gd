@@ -49,6 +49,9 @@ var rig: ScreenRig
 var screen_hits := {} # controller -> ray hit on the video screen (or null)
 var signin: SignIn
 var downloads: Downloads
+var link: DeviceLink # sends saved videos to FrameTube on the user's other devices
+var _link_testing := false
+var _ask_queue: Array = [] # [id, name]: devices waiting for "Allow videos from ...?"
 var _delete_confirm_until := 0.0
 var _showing_downloads := false # the Browse list is "Downloads" (cards offer Delete)
 var _card_delete := {} # id -> time until which a second Delete press confirms
@@ -64,7 +67,7 @@ var end_action := 0
 var autohide_on := true
 var prig: PanelRig # menu placement / size
 var hand_vis: Array[HandVisuals] = []
-var hands_on := true
+var hands_mode := 0 # HandVisuals.MODES
 var haptics_on := true
 var _clear_confirm_until := 0.0
 var subs: Subtitles
@@ -85,6 +88,12 @@ var _hint_shown := false
 var _last_panel_use := 0.0
 var search_results: Array = []
 var _request := 0 # video loads
+## Infinite scrolling: what the Browse list is showing and where the next page starts.
+## {kind: "search" | "feed", key, next (1-based), more, loading, seen: {id: true}, hidden}
+var _paging := {}
+var topics: Array = [] # Discover pills: [label, query, kind] (Settings / Browse "Edit")
+var topics_on := true
+var _topics_editing := false
 var _search_request := 0 # searches/feeds (separate, so a search never cancels a video load)
 var _ptr_pos := Vector2.ZERO
 var _ptr_down := false
@@ -143,6 +152,19 @@ func _ready() -> void:
 			return "Sure?" if Time.get_ticks_msec() / 1000.0 < float(_card_delete.get(id, 0.0)) else "Delete"
 		return downloads.label(id)
 	ui.lang_toggled.connect(_toggle_save_lang)
+	ui.results_near_end.connect(_load_more)
+	link = DeviceLink.new()
+	link.setup(store, downloads)
+	downloads.link = link
+	add_child(link)
+	link.changed.connect(func():
+		_refresh_download_ui()
+		_refresh_setting_labels())
+	link.message.connect(ui.set_status)
+	link.ask.connect(_on_link_ask)
+	ui.ask_answered.connect(_on_ask_answered)
+	ui.result_send.connect(_send_result)
+	ui.card_send_text = _card_send_text
 	_load_settings()
 	_set_projection(YouTube.FLAT)
 	ui.auto_keyboard = xr_mode # VR: on-screen keyboard pops up when you tap the search box
@@ -152,6 +174,13 @@ func _ready() -> void:
 	setup.finished.connect(_on_setup_finished)
 	ui.setup_retry_pressed.connect(_on_setup_retry)
 	ui.discover_pressed.connect(_search)
+	ui.topic_remove.connect(_remove_topic)
+	ui.topic_save.connect(_save_topic)
+	ui.topic_edit.connect(func():
+		_topics_editing = not _topics_editing
+		if _topics_editing:
+			ui.set_status("Tap a topic to remove it. Settings > Discover topics can bring the original ones back.")
+		_refresh_topics())
 	engine.playback_started.connect(_on_playback_started)
 	_check_setup.call_deferred() # after _run_autotest has had a chance to set _autotest_running
 	# Tracking isn't valid on the first frames; recenter once the headset pose settles.
@@ -168,6 +197,20 @@ func _run_autotest() -> void:
 		if a.begins_with("--"):
 			var kv := a.substr(2).split("=", true, 1)
 			opts[kv[0]] = kv[1] if kv.size() > 1 else "1"
+	# Device link test hooks: two copies on one machine can't share the discovery port.
+	if opts.has("link-port"):
+		link.port = int(opts["link-port"])
+	if opts.has("link-bind"):
+		link.bind_address = str(opts["link-bind"])
+	if opts.has("link-no-discovery"):
+		link.discovery = false
+	if opts.has("link-peer"):
+		link.extra_peers = Array(str(opts["link-peer"]).split(","))
+	link.start()
+	if opts.has("link-test"):
+		_link_testing = true
+		_link_test(opts)
+		return
 	if not opts.has("play"):
 		return
 	_autotest_running = not opts.has("welcome") # --welcome: keep the real startup list + menu auto-hide
@@ -397,8 +440,49 @@ func _run_autotest() -> void:
 		_pin_test()
 	elif opts.has("welcome") and opts.play == "x":
 		pass # startup shows its own list
+	elif opts.has("topics-test"):
+		var shot := func(n: String) -> void:
+			await get_tree().create_timer(0.4).timeout
+			await RenderingServer.frame_post_draw
+			if shots != "":
+				viewport.get_texture().get_image().save_png(shots.path_join("topics_%s.png" % n))
+		print("[topics] persist=%s start: %s" % [store.persist, topics.map(func(t): return t[0])])
+		_last_search = "cozy fireplace 4k"
+		_refresh_topics()
+		await shot.call("1_offer")
+		_save_topic()
+		_last_search = "360 drone flight over iceland"
+		_save_topic()
+		print("[topics] saved: ", topics.map(func(t): return "%s(%s)" % [t[0], t[2]]))
+		await shot.call("2_saved")
+		ui.topic_edit.emit()
+		await shot.call("3_edit")
+		ui.topic_remove.emit(0)
+		print("[topics] after removing first: ", topics.map(func(t): return t[0]), " editing=", _topics_editing)
+		ui.topic_edit.emit()
+		_on_setting("topics")
+		print("[topics] off -> row visible=", ui.topics_box.visible, " label=", ui._setting_btns["topics"].text)
+		_on_setting("topics")
+		_on_setting("topics_reset")
+		print("[topics] reset: ", topics.size(), " visible=", ui.topics_box.visible)
 	elif opts.has("search"):
 		_search(str(opts.search))
+		if opts.has("scroll-test"): # scroll to the bottom like a user would, N times
+			for n in int(opts["scroll-test"]):
+				while _paging.is_empty() or _paging.loading or search_results.is_empty():
+					await get_tree().create_timer(0.2).timeout
+				print("[scroll] have %d (more=%s) status='%s'" % [search_results.size(), _paging.more, ui.status_label.text])
+				var sb := ui.results_scroll.get_v_scroll_bar()
+				await get_tree().process_frame
+				ui.results_scroll.scroll_vertical = int(sb.max_value)
+				await get_tree().create_timer(0.5).timeout
+			while _paging.loading:
+				await get_tree().create_timer(0.2).timeout
+			var ids := {}
+			for it in search_results:
+				ids[it.id] = true
+			print("[scroll] final %d results, %d unique, cards=%d status='%s'" % [search_results.size(), ids.size(),
+				ui.results_grid.get_child_count(), ui.status_label.text])
 	elif opts.has("feed"):
 		_on_feed(str(opts.feed)) # --play=x --feed=subscriptions : list a feed instead of playing
 	else:
@@ -1109,12 +1193,19 @@ func _load_settings() -> void:
 	end_action = clampi(int(store.get_setting("end_action", 0)), 0, END_ACTIONS.size() - 1)
 	autohide_on = bool(store.get_setting("autohide", true))
 	toy.set_mode(clampi(int(store.get_setting("toy_mode", 0)), 0, FidgetToy.MODES.size() - 1))
-	hands_on = bool(store.get_setting("hands", true))
+	var hm = store.get_setting("hands_mode", -1)
+	if int(hm) < 0: # older builds: on / off
+		hm = 0 if bool(store.get_setting("hands", true)) else 3
+	hands_mode = clampi(int(hm), 0, HandVisuals.MODES.size() - 1)
 	for hv in hand_vis:
-		hv.set_shown(hands_on)
+		hv.set_mode(hands_mode)
 	haptics_on = bool(store.get_setting("haptics", true))
 	subs_pref = str(store.get_setting("subs_pref", ""))
 	subs_size_idx = clampi(int(store.get_setting("subs_size", 1)), 0, SUB_SIZES.size() - 1)
+	var tp = store.get_setting("topics", null)
+	topics = tp if tp is Array else UIPanel.DISCOVER.duplicate(true)
+	topics_on = bool(store.get_setting("topics_on", true))
+	_refresh_topics()
 	var langs = store.get_setting("subs_save", ["all"])
 	downloads.save_langs = langs if langs is Array else ["all"]
 	YouTube.family_filter = bool(store.get_setting("family", true)) # on by default
@@ -1303,6 +1394,36 @@ func _on_setting(key: String) -> void:
 			store.set_setting("bloom", envs.bloom)
 		"repair":
 			_repair()
+		"topics":
+			topics_on = not topics_on
+			store.set_setting("topics_on", topics_on)
+			_refresh_topics()
+		"topics_reset":
+			topics = UIPanel.DISCOVER.duplicate(true)
+			store.set_setting("topics", topics)
+			_refresh_topics()
+			ui.set_status("The original Discover topics are back. (Ones you saved are gone.)")
+		"save_to":
+			var ids: Array = [""]
+			for pe in link.peer_list():
+				ids.append(pe.id)
+			if ids.size() == 1:
+				ui.set_status("Open FrameTube on your other device (e.g. the Steam Frame), on the same Wi-Fi, and it shows up here.")
+			else:
+				var to: String = ids[(ids.find(_save_target()) + 1) % ids.size()]
+				store.set_setting("save_to", to)
+				if to == "":
+					ui.set_status("Downloads stay on %s." % link.here_label().replace("This", "this"))
+				else:
+					ui.set_status("Downloads go to %s: downloaded here, then sent over Wi-Fi when FrameTube is open there.%s" % [
+						link.peer_name(to), "" if link.is_online(to) else " (It isn't open right now.)"])
+		"link_receive":
+			link.enabled = not link.enabled
+			store.set_setting("link_receive", link.enabled)
+			if not link.enabled:
+				link.forget_all() # turning it back on asks again for each device
+			ui.set_status("Other devices can send videos here (you're asked once per device)." if link.enabled
+				else "Not receiving videos from other devices. Devices you'd allowed are forgotten.")
 		"downloads":
 			OS.shell_open(Downloads.folder())
 			ui.set_status("Saved videos are in " + Downloads.folder() + (" (opened on the computer screen)." if xr_mode else "."))
@@ -1328,10 +1449,10 @@ func _on_setting(key: String) -> void:
 			toy.set_mode((toy.mode + 1) % FidgetToy.MODES.size())
 			store.set_setting("toy_mode", toy.mode)
 		"hands":
-			hands_on = not hands_on
-			store.set_setting("hands", hands_on)
+			hands_mode = (hands_mode + 1) % HandVisuals.MODES.size()
+			store.set_setting("hands_mode", hands_mode)
 			for hv in hand_vis:
-				hv.set_shown(hands_on)
+				hv.set_mode(hands_mode)
 		"family":
 			YouTube.family_filter = not YouTube.family_filter
 			store.set_setting("family", YouTube.family_filter)
@@ -1378,13 +1499,19 @@ func _refresh_setting_labels() -> void:
 	ui.set_setting("autohide", "On" if autohide_on else "Off")
 	ui.set_setting("menu_size", _menu_size_label())
 	ui.set_setting("toy_mode", FidgetToy.MODES[toy.mode])
-	ui.set_setting("hands", "On" if hands_on else "Off")
+	ui.set_setting("hands", HandVisuals.MODES[hands_mode])
 	ui.set_setting("family", "On" if YouTube.family_filter else "Off")
 	ui.set_setting("haptics", "On" if haptics_on else "Off")
 	ui.set_setting("curve", ScreenRig.CURVES[rig.curve_mode])
 	ui.set_setting("subs_size", SUB_SIZES[subs_size_idx][0])
 	ui.set_setting("pin", "On (change)" if _pin_set() else "Off (set a PIN)")
 	ui.set_setting("subs_save", _save_langs_label())
+	ui.set_setting("topics", ("On (%d)" % topics.size()) if topics_on else "Off")
+	ui.set_setting("topics_reset", "Restore")
+	var to := _save_target()
+	ui.set_setting("save_to", link.here_label() if to == "" else _short(link.peer_name(to)))
+	var n_ok := link.trusted().size()
+	ui.set_setting("link_receive", ("On (%d allowed)" % n_ok if n_ok > 0 else "On") if link.enabled else "Off")
 	var n := downloads.items.size()
 	ui.set_setting("downloads", "None yet" if n == 0 else "%d video%s · %s" % [n, "" if n == 1 else "s",
 		Downloads.size_text(downloads.total_bytes())])
@@ -1467,6 +1594,7 @@ func _check_signin_expired() -> void:
 
 
 func _on_feed(key: String) -> void:
+	_paging = {}
 	if key == "downloads":
 		search_results = downloads.list()
 		_showing_downloads = true
@@ -1486,7 +1614,8 @@ func _on_feed(key: String) -> void:
 		return
 	_search_request += 1
 	ui.set_status("Loading...")
-	_run_async(func(): return YouTube.feed(key), _on_search_done.bind(_search_request))
+	_paging = {"kind": "feed", "key": key, "next": 1, "more": false, "loading": true}
+	_run_async(func(): return YouTube.feed(key, PAGE_FIRST), _on_search_done.bind(_search_request))
 
 
 func _save_position() -> void:
@@ -1529,6 +1658,8 @@ func _notification(what: int) -> void:
 
 ## Startup: make sure the video helpers exist (download them on first run), then get going.
 func _check_setup() -> void:
+	if _link_testing:
+		return
 	ui.set_status("Starting up...")
 	_run_async(ToolSetup.missing_tools, _on_missing_checked)
 
@@ -1584,7 +1715,8 @@ func _on_ready_to_use() -> void:
 		_on_feed("history")
 		ui.set_status("Welcome back! Pick up where you left off, or tap a Discover topic.")
 	else:
-		_search(UIPanel.DISCOVER[0][1], "Here are some VR videos to get you started. Tap one to play!")
+		_search(str(topics[0][1]) if not topics.is_empty() else UIPanel.DISCOVER[0][1],
+			"Here are some VR videos to get you started. Tap one to play!")
 
 
 ## A failed load: say what happened in plain words. If it looks like YouTube changed something,
@@ -1661,7 +1793,8 @@ func _search(query: String, done_message := "") -> void:
 	_search_request += 1
 	_last_search = query
 	ui.set_status("Searching...")
-	_run_async(func(): return YouTube.search(query), _on_search_done.bind(_search_request, done_message))
+	_paging = {"kind": "search", "key": query, "next": 1, "more": false, "loading": true}
+	_run_async(func(): return YouTube.search(query, PAGE_FIRST), _on_search_done.bind(_search_request, done_message))
 
 
 func _on_search_done(r: Dictionary, id: int, done_message := "") -> void:
@@ -1674,8 +1807,17 @@ func _on_search_done(r: Dictionary, id: int, done_message := "") -> void:
 			_handle_error(r.error, func(): _search(_last_search))
 		return
 	_updated_after_error = false
+	_refresh_topics() # offers "+ Save" for this search
 	search_results = r.results
 	_showing_downloads = false
+	if not _paging.is_empty():
+		_paging.loading = false
+		_paging.next = 1 + PAGE_FIRST
+		_paging.more = bool(r.get("more", false))
+		_paging.hidden = int(r.get("hidden", 0))
+		_paging.seen = {}
+		for it in search_results:
+			_paging.seen[it.id] = true
 	ui.show_results(search_results)
 	if search_results.is_empty():
 		ui.set_status("Nothing found. Try other words.")
@@ -1794,8 +1936,12 @@ func _on_download_pressed() -> void:
 			if _last_info.get("is_live", false):
 				ui.set_status("Live streams can't be saved.")
 				return
-			downloads.add(current_url, _last_info, _download_height(_last_info), projection)
-			ui.set_status("Saving this video for offline watching (press the button again to cancel). You can keep watching meanwhile.")
+			var to := _save_target()
+			downloads.add(current_url, _last_info, _download_height(_last_info, to), projection, to)
+			if to != "":
+				ui.set_status("Downloading this video for %s (press the button again to cancel). You can keep watching meanwhile." % link.peer_name(to))
+			else:
+				ui.set_status("Saving this video for offline watching (press the button again to cancel). You can keep watching meanwhile.")
 	_refresh_download_ui()
 
 
@@ -1854,8 +2000,12 @@ func _on_result_resolved_for_download(info: Dictionary, url: String, id: String,
 	elif info.get("is_live", false):
 		ui.set_status("Live streams can't be saved.")
 	else:
-		downloads.add(url, info, h if h != YouTube.AUTO else _download_height(info), store.saved_projection(url))
-		ui.set_status("Saving \"%s\" in the background (press its button again to cancel)." % info.get("title", ""))
+		var to := _save_target()
+		downloads.add(url, info, h if h != YouTube.AUTO else _download_height(info, to), store.saved_projection(url), to)
+		if to != "":
+			ui.set_status("Downloading \"%s\" for %s (press its button again to cancel)." % [info.get("title", ""), link.peer_name(to)])
+		else:
+			ui.set_status("Saving \"%s\" in the background (press its button again to cancel)." % info.get("title", ""))
 	_refresh_download_ui()
 
 
@@ -2041,12 +2191,16 @@ func _update_quality_label() -> void:
 
 
 ## Saving with Auto: the stream Auto picked (what plays well here), or 4K if nothing is known.
-func _download_height(info: Dictionary) -> int:
+## For a Steam Frame (to watch on it by itself) Auto keeps to 4K, what it plays smoothly on its own.
+func _download_height(info: Dictionary, to := "") -> int:
 	if QUALITIES[quality_idx] != YouTube.AUTO:
 		return QUALITIES[quality_idx]
 	var w := int(info.get("width", 0))
 	var h := int(info.get("height", 0))
-	return mini(w, h) if w > 0 and h > 0 else 2160
+	var res := mini(w, h) if w > 0 and h > 0 else 2160
+	if to != "" and link.peers.has(to) and link.peers[to].kind == "frame":
+		res = mini(res, 2160)
+	return res
 
 
 ## Auto: if frames keep arriving too slowly to show the video smoothly (the PC can't decode it fast
@@ -2085,3 +2239,233 @@ func _watch_performance(delta: float) -> void:
 	ui.set_status("This video was too much to play smoothly at %s, so FrameTube switched to %s." %
 		[UIPanel.quality_name(res), UIPanel.quality_name(next)])
 	_play(current_url, engine.get_position(), true)
+
+
+# --- Other devices (DeviceLink) ---------------------------------------------------------------------
+
+## Where new downloads go: "" = here, else a device id.
+func _save_target() -> String:
+	var to := str(store.get_setting("save_to", ""))
+	return to if link.peers.has(to) else ""
+
+
+static func _short(t: String) -> String:
+	return t if t.length() <= 18 else t.left(17) + "…"
+
+
+## Downloads list: the second button on a saved video ("" = none).
+func _card_send_text(id: String) -> String:
+	if not _showing_downloads or downloads.state(id) != "saved":
+		return ""
+	if str(downloads.items[id].get("send_to", "")) != "":
+		return link.send_label(id)
+	var to := _send_peer()
+	return "" if to == "" else "Send to " + link.short_name(to)
+
+
+## The device "Send to" offers: the Save-to device, else the first one known.
+func _send_peer() -> String:
+	var to := _save_target()
+	if to == "":
+		var l := link.peer_list()
+		to = l[0].id if not l.is_empty() else ""
+	return to
+
+
+func _send_result(i: int) -> void:
+	if i >= search_results.size():
+		return
+	var id := str(search_results[i].id)
+	if not downloads.items.has(id):
+		return
+	var e: Dictionary = downloads.items[id]
+	if str(e.get("send_to", "")) != "":
+		var name := link.peer_name(e.send_to)
+		link.cancel_send(id)
+		downloads.clear_send(id)
+		ui.set_status("Stopped sending to %s. It stays on %s." % [name, link.here_label().replace("This", "this")])
+	else:
+		var to := _send_peer()
+		if to == "":
+			return
+		downloads.mark_send(id, to, false)
+		ui.set_status("Sending a copy of \"%s\" to %s%s" % [e.title, link.peer_name(to),
+			"." if link.is_online(to) else " when FrameTube is open there (same Wi-Fi)."])
+	_refresh_download_ui()
+
+
+func _on_link_ask(id: String, name: String) -> void:
+	_ask_queue.append([id, name])
+	if _ask_queue.size() == 1:
+		_show_next_ask()
+
+
+func _show_next_ask() -> void:
+	if _ask_queue.is_empty():
+		ui.hide_ask()
+		return
+	var a: Array = _ask_queue[0]
+	ui.show_ask("\"%s\" (FrameTube on another device) wants to send videos to %s. Allow it?" % [a[1], link.here_label().replace("This", "this")])
+	if not panel.visible:
+		_toggle_panel()
+
+
+func _on_ask_answered(allow: bool) -> void:
+	if _ask_queue.is_empty():
+		ui.hide_ask()
+		return
+	if allow and _pin_set() and not await _check_pin():
+		return # keep asking
+	var a: Array = _ask_queue.pop_front()
+	link.answer(a[0], allow)
+	_show_next_ask()
+	_refresh_setting_labels()
+
+
+## --link-test: two copies on one machine. Sender: --link-send=<video file> (--link-move);
+## receiver: --link-allow[=no] (answers when asked). Both print what happened and quit.
+func _link_test(opts: Dictionary) -> void:
+	var quit_at := float(opts.get("quit-at", 60))
+	var t0 := Time.get_ticks_msec() / 1000.0
+	print("[link] me=%s %s port=%d folder=%s" % [link.my_id, link.my_name, link.port, Downloads.folder()])
+	link.message.connect(func(m): print("[link] status: ", m))
+	if opts.has("link-allow"):
+		link.ask.connect(func(_id, n):
+			print("[link] asked by %s bar=%s text=%s" % [n, ui.ask_bar.visible, ui.ask_label.text])
+			await get_tree().create_timer(1.5).timeout
+			ui.ask_answered.emit(opts["link-allow"] != "no"), CONNECT_DEFERRED)
+	if opts.has("link-send"):
+		var f := str(opts["link-send"])
+		var vid := str(opts.get("link-id", "jNQXAC9IVRw"))
+		downloads.import_item({"id": vid, "title": "Link test <%s>: a/b?" % vid, "duration": 19.0, "width": 320,
+			"height": 240, "projection": 0}, f, [])
+		if opts.has("link-sub"):
+			downloads.items[vid].subs = [{"code": "en", "name": "English", "auto": false, "url": str(opts["link-sub"])}]
+		while link.peers.is_empty() and Time.get_ticks_msec() / 1000.0 - t0 < quit_at:
+			await get_tree().create_timer(0.2).timeout
+		print("[link] peers: ", link.peers.values().map(func(pe): return "%s@%s:%d" % [pe.name, pe.ip, pe.port]))
+		if not link.peers.is_empty():
+			_showing_downloads = true
+			print("[link] send button: '%s'" % _card_send_text(vid))
+			if opts.has("shots"): # the Downloads list with its Send button
+				panel.visible = true
+				_on_feed("downloads")
+				await get_tree().create_timer(0.5).timeout
+				await RenderingServer.frame_post_draw
+				viewport.get_texture().get_image().save_png(str(opts.shots).path_join("link_downloads.png"))
+			downloads.mark_send(vid, link.peers.keys()[0], opts.has("link-move"))
+			var last := ""
+			while downloads.items.has(vid) and str(downloads.items[vid].get("send_to", "")) != "":
+				var l := link.send_label(vid)
+				if l != last:
+					print("[link] button: ", l)
+					last = l
+				if Time.get_ticks_msec() / 1000.0 - t0 > quit_at:
+					break
+				await get_tree().create_timer(0.1).timeout
+			print("[link] done: still here=%s file kept=%s" % [downloads.items.has(vid), FileAccess.file_exists(f)])
+	else:
+		while Time.get_ticks_msec() / 1000.0 - t0 < quit_at:
+			await get_tree().create_timer(0.5).timeout
+		for id in downloads.items:
+			var e: Dictionary = downloads.items[id]
+			print("[link] received: %s title=%s file=%s bytes=%d subs=%s" % [id, e.title, str(e.file).get_file(), e.bytes,
+				e.subs.map(func(t): return str(t.url).get_file())])
+	get_tree().quit()
+
+
+# --- Infinite scrolling --------------------------------------------------------------------------------
+
+const PAGE_FIRST := 20 # the first page comes quickly...
+const PAGE_MORE := 20 # ...then more each time you scroll near the bottom
+
+
+func _load_more() -> void:
+	if _paging.is_empty() or _paging.loading or not _paging.more or _showing_downloads:
+		return
+	_paging.loading = true
+	var req := _search_request
+	var p := _paging
+	var start: int = p.next
+	ui.set_status("Loading more...")
+	var job := func(): return YouTube.search(p.key, PAGE_MORE, start)
+	if p.kind == "feed":
+		job = func(): return YouTube.feed(p.key, PAGE_MORE, start)
+	_run_async(job, _on_more_done.bind(req, p))
+
+
+func _on_more_done(r: Dictionary, req: int, p: Dictionary) -> void:
+	if req != _search_request or not is_same(p, _paging): # a new search or list replaced this one meanwhile
+		return
+	p.loading = false
+	if r.has("error"):
+		p.more = false
+		ui.set_status("Couldn't load more videos. Scroll up and down to try again.")
+		get_tree().create_timer(5.0).timeout.connect(func(): if is_same(p, _paging): p.more = true)
+		return
+	p.next += PAGE_MORE
+	p.more = bool(r.get("more", false))
+	p.hidden += int(r.get("hidden", 0))
+	var fresh := []
+	for it in r.results:
+		if not p.seen.has(it.id): # results can shift between pages; don't show one twice
+			p.seen[it.id] = true
+			fresh.append(it)
+	var first := search_results.size()
+	search_results.append_array(fresh)
+	ui.append_results(fresh, first)
+	var msg := "%d videos." % search_results.size() if p.more else "That's everything (%d videos)." % search_results.size()
+	if int(p.hidden) > 0:
+		msg += "  (Family filter hid %d.)" % int(p.hidden)
+	ui.set_status(msg)
+	# Still near the bottom once the new cards are laid out (the family filter hid most of a page)? Keep going.
+	get_tree().create_timer(0.4).timeout.connect(func(): if is_same(p, _paging): ui._check_near_end())
+
+
+# --- Discover topics --------------------------------------------------------------------------------
+
+func _refresh_topics() -> void:
+	ui.topics_box.visible = topics_on
+	var save := ""
+	var q := _last_search.strip_edges()
+	if q != "" and not q.contains("://") and not topics.any(func(t): return str(t[1]).to_lower() == q.to_lower()):
+		save = _topic_label(q)
+	ui.set_topics(topics, _topics_editing, save)
+
+
+static func _topic_label(q: String) -> String:
+	var l := q.strip_edges()
+	l = l.left(1).to_upper() + l.substr(1)
+	return l if l.length() <= 22 else l.left(21).strip_edges() + "…"
+
+
+static func _topic_kind(q: String) -> String:
+	var s := q.to_lower()
+	if s.contains("360"):
+		return "360"
+	if s.contains("180") or s.contains("vr 3d") or s.contains("3d vr"):
+		return "180"
+	return ""
+
+
+func _save_topic() -> void:
+	var q := _last_search.strip_edges()
+	if q == "":
+		return
+	topics.append([_topic_label(q), q, _topic_kind(q)])
+	store.set_setting("topics", topics)
+	_refresh_topics()
+	_refresh_setting_labels()
+	ui.set_status("Saved \"%s\" to Discover." % _topic_label(q))
+
+
+func _remove_topic(i: int) -> void:
+	if i < 0 or i >= topics.size():
+		return
+	var t: Array = topics.pop_at(i)
+	store.set_setting("topics", topics)
+	if topics.is_empty():
+		_topics_editing = false
+	_refresh_topics()
+	_refresh_setting_labels()
+	ui.set_status("Removed \"%s\"." % t[0])

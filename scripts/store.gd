@@ -4,7 +4,7 @@ extends RefCounted
 
 const SETTINGS_PATH := "user://settings.cfg"
 const HISTORY_PATH := "user://history.json"
-const MAX_HISTORY := 60
+const MAX_HISTORY := 500
 const RESUME_MIN := 15.0 # don't bother resuming in the first / last 15 s
 
 var history: Array = [] # newest first: {id, url, title, duration, pos, projection, watched_at}

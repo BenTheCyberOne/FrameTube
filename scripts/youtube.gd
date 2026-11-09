@@ -40,29 +40,34 @@ static func family_ok(item: Dictionary) -> bool:
 	return not _matches("\\b(" + "|".join(FAMILY_BLOCK) + ")\\b", text)
 
 
-static func search(query: String, count := 20) -> Dictionary:
+## Results start..start+count-1 (1-based), so a list can keep growing as you scroll.
+static func search(query: String, count := 20, start := 1) -> Dictionary:
 	var q := query + (FAMILY_QUERY_EXCLUDE if family_filter else "")
-	return list("ytsearch%d:%s" % [count, q], count)
+	return list("ytsearch%d:%s" % [start + count - 1, q], count, start)
 
 
 ## A feed key from FEEDS (needs an account), or any yt-dlp playlist/search target.
-static func feed(key: String, count := 30) -> Dictionary:
-	var r := list(FEEDS.get(key, key), count)
-	var empty: bool = r.has("error") or r.results.is_empty()
+static func feed(key: String, count := 30, start := 1) -> Dictionary:
+	var r := list(FEEDS.get(key, key), count, start)
+	var empty: bool = start == 1 and (r.has("error") or r.results.is_empty())
 	if empty and cookie_args().is_empty():
 		r.error = "This needs your YouTube account. Open Settings and press Sign in."
 	return r
 
 
-static func list(target: String, count := 30) -> Dictionary:
+## "more": the list probably goes on (this page came back full).
+static func list(target: String, count := 30, start := 1) -> Dictionary:
 	var args := _common_args()
-	args.append_array(["--flat-playlist", "--playlist-end", str(count), "-J", target])
+	args.append_array(["--flat-playlist", "-I", "%d:%d" % [start, start + count - 1], "-J", target])
 	var data = _run_json(args)
 	if data is String:
 		return {"error": data}
 	var results := []
 	var hidden := 0
-	for e in data.get("entries", []):
+	var entries = data.get("entries", [])
+	if not (entries is Array):
+		entries = []
+	for e in entries:
 		if typeof(e) != TYPE_DICTIONARY or _str(e, "id") == "":
 			continue
 		var ie := _str(e, "ie_key")
@@ -86,7 +91,7 @@ static func list(target: String, count := 30) -> Dictionary:
 			results.append(item)
 		else:
 			hidden += 1
-	return {"results": results, "hidden": hidden}
+	return {"results": results, "hidden": hidden, "more": entries.size() >= count}
 
 
 ## Subtitle choices for a video: every human-made track, plus auto-generated captions in the video's own
