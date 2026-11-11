@@ -8,11 +8,30 @@ Free and open source ([MIT](LICENSE)).
 > FrameTube is an independent project. It isn't affiliated with, endorsed by or sponsored by YouTube, Google
 > or Valve. See [Third-party notices](THIRD_PARTY_NOTICES.md) and [License & credits](#license--credits).
 
+<p align="center">
+  <img src="docs/screenshot-cinema.png" width="49%" alt="A film playing on the big screen in the Cinema room">
+  <img src="docs/screenshot-menu.png" width="49%" alt="The FrameTube menu: search, Discover topics, results and the player controls">
+</p>
+
+## Features
+
+- **YouTube VR done right**: 360°, 180° (VR180) and 3D videos are detected and shown the right way round,
+  up to 8K on a PC and 4K on the Frame by itself.
+- **A big screen for everything else**, in a room of your choice (Cinema, Starfield, Synthwave, ...). Grab it,
+  move it, resize it, curve it.
+- **Search, Discover topics, Continue watching**, and with a YouTube account, Subscriptions and Watch later.
+  Lists keep loading as you scroll.
+- **Downloads** for watching offline, and **sending videos between your PC and your Frame** over Wi-Fi.
+- **Subtitles, playback speed, resume** where you stopped, play next.
+- **Family-friendly filter** (on by default) and a **parental PIN**.
+- **No setup**: it downloads its helpers (yt-dlp, FFmpeg, Deno) by itself and keeps them up to date.
+
 ## Quick start (no technical knowledge needed)
 
-1. Download the zip for your device from the releases page:
+1. Download the zip for your device from the [releases page](../../releases):
    - **FrameTube-Windows**: run it on your PC and stream to the Steam Frame. Smoothest, even 8K VR videos.
    - **FrameTube-SteamFrame**: runs right on the headset, no PC needed.
+   - **FrameTube-Linux**: for Linux PCs (x86_64).
 2. Unzip it and open FrameTube. The step-by-step guide is in the zip ("How to install.txt"); the same text is in
    [`docs/install-windows.txt`](docs/install-windows.txt) and [`docs/install-steamframe.txt`](docs/install-steamframe.txt).
 3. The first time, FrameTube downloads what it needs by itself (about 300 MB, once). Then tap a **Discover**
@@ -25,8 +44,8 @@ remembers where you stopped, and tucks the menu away while you watch (B / Y or M
 
 ## About the project
 
-Built in Godot 4.7 with OpenXR. It plays streams through yt-dlp, the same approach as yt-dlp itself, NewPipe,
-FreeTube and SmartTube, which are all open source on GitHub. That goes against YouTube's terms of service (an
+Built in Godot 4.7 with OpenXR. It plays streams through yt-dlp, the same approach as NewPipe, FreeTube and
+SmartTube, which are all open source on GitHub. That goes against YouTube's terms of service (an
 agreement between each viewer and YouTube), so the Steam store is out, but publishing the source code is fine.
 Releases don't contain any third-party binaries: the app downloads yt-dlp, ffmpeg and Deno from their official
 GitHub releases on first run.
@@ -118,7 +137,7 @@ change its distance. Bias lighting and the cinema's screen light follow the scre
 
 ## Panel
 
-Two pages, **Browse** and **Settings**, with the player controls always visible underneath. A **Welcome**
+Two pages, **Browse** and **Settings**, with a **Now playing** card underneath once a video has been opened. A **Welcome**
 page takes over on first run while the helpers download (progress bar, "Try again" on failure).
 
 - **Startup list**: "Continue watching" if you've watched something before, otherwise a Discover topic, so
@@ -150,13 +169,13 @@ page takes over on first run while the helpers download (progress bar, "Try agai
     controllers), Colour theme, Ambient glow, Glow effects.
   - *Advanced*: Video decoding, Repair (re-downloads the helpers), version info.
 - **Volume** slider in the player controls (desktop: ↑/↓), remembered between sessions.
-- **Subtitles** (player row): cycles Off and the video's tracks: every human-made one, plus auto-generated
+- **Subtitles** (player tiles): cycles Off and the video's tracks: every human-made one, plus auto-generated
   captions in the video's language and English (YouTube's ~100 machine translations are skipped). Fetched as
   YouTube's `json3` timed text (`scripts/subtitles.gd`) and timed off the video clock. Shown on the lower part of
   a flat screen (pushed forward on curved screens) or head-locked low in your view for 360°/180° (above the
   menu while it's open). The chosen language switches on automatically for the next video. Size: Settings >
   Subtitle size.
-- **Speed** (player row): 0.5× to 2×. ffmpeg retimes the video (`setpts`, output stays at the source fps so
+- **Speed** (player tiles): 0.5× to 2×. ffmpeg retimes the video (`setpts`, output stays at the source fps so
   2× costs no extra decoding) and the audio (`atempo`, which keeps the pitch); the engine's clock runs at the
   chosen speed. Measured at 2×: media time +2.0 s per second, A/V within ±17 ms.
 - **Screen shape** (Settings > Watching): Flat, Curved (radius 1.8× the viewing distance) or Extra curved
@@ -201,8 +220,12 @@ page takes over on first run while the helpers download (progress bar, "Try agai
   creators' rights and YouTube's terms.
 - **Sending videos between devices** (`scripts/link.gd`): FrameTube on the PC and on the Frame find each
   other on the home network and can move saved videos across. See [below](#sending-videos-between-devices).
-- Player row: **Video type** (auto-detected; cycle it if a video looks wrong), **Screen** size + **Reset**,
-  **Quality** (Auto / HD / 2K / 4K / 5.7K / 8K maximum), **Swap eyes**.
+- **Now playing** card at the bottom of the menu: title and time, the seek bar, then -30s / -10s / Play /
+  +10s / +30s, Volume, Download, Recenter and Hide menu. Under those, tiles that show their current value:
+  **Video type** (auto-detected; cycle it if a video looks wrong), **Quality** (Auto / HD / 2K / 4K / 5.7K /
+  8K maximum), **Subtitles**, **Speed**, **Screen size**, **3D eyes** (swap) and **Screen: Reset**. Every
+  control in the card can shrink (long values end in "..."), so the menu never grows past its 1500 px and
+  nothing ends up off the edge. `--ui-test` checks that with the longest labels.
   - **Auto** (the default) shows what it picked, e.g. "Auto (8K)". 360°/180° videos spread their pixels all
     around you, so they need far more than a flat screen: 4K over 360° is only about 10 pixels per degree,
     half of what the headset shows, which is why 4K 360 looks soft. Auto takes VR videos up to 8K (5.7K when
@@ -296,8 +319,8 @@ cube faces (`[left][front][right] / [down][back][up]`, bottom row rotated) rathe
 image. The face orientations in `video.gdshader` were fitted face by face against ffmpeg's `v360=eac` filter,
 and renders in six directions matched ffmpeg's.
 
-If the guess is wrong, cycle it with **View**. The choice is remembered for that video. **Swap eyes** fixes
-stereo that looks inside-out.
+If the guess is wrong, cycle it with **Video type**. The choice is remembered for that video. **3D eyes** swaps
+the eyes when stereo looks inside-out.
 
 ## Test mode
 
@@ -311,7 +334,7 @@ audio is ahead). It also saves screenshots and doesn't touch your real settings 
 `--persist`.
 
 Other test hooks (after `--`): `--search=<q> --scroll-test=N` (scrolls to the bottom N times and checks for
-repeats), `--topics-test`, `--rig-test` (menu, toy and hands), `--pin-test`, `--langs-test`, and the device link:
+repeats), `--topics-test`, `--ui-test` (menu fits with the longest labels), `--rig-test` (menu, toy and hands), `--pin-test`, `--langs-test`, and the device link:
 ```
 # receiver                                       # sender (another copy of the project, so user:// differs)
 FRAMETUBE_VIDEOS=<dirB> godot --path projB ...   FRAMETUBE_VIDEOS=<dirA> godot --path projA ...
@@ -358,3 +381,5 @@ describe what the app works with. FrameTube doesn't host or distribute videos: t
 and belong to their creators. Using a third-party YouTube client may go against YouTube's terms of service,
 which is between you and YouTube. Download only for your own offline viewing, and respect creators' rights.
 The software is provided "as is", without warranty of any kind (see the license).
+
+The screenshots show *Tears of Steel* by the [Blender Foundation](https://mango.blender.org) (CC BY 3.0).

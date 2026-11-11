@@ -79,7 +79,7 @@ IF SOMETHING GOES WRONG
   A browser window opens; sign in to YouTube there. Firefox closes by itself;
   with Chrome or Edge, close the window yourself when you're signed in.
   If you're wearing the headset, the window is on the PC's screen (or in SteamVR's desktop view).
-- The 3D looks "inside out": turn on "Swap eyes".
+- The 3D looks "inside out": press "3D eyes" (under the player) to swap them.
 
 FORGOT THE PARENTAL PIN?
 ------------------------

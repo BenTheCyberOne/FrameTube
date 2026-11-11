@@ -70,10 +70,10 @@ var play_btn: Button
 var proj_btn: Button
 var quality_btn: Button
 var screen_btn: Button
-var swap_btn: CheckButton
+var swap_btn: Button
 var keyboard: VBoxContainer
 var browse_page: VBoxContainer
-var player_box: VBoxContainer # now-playing + controls; hidden until a video has been opened
+var player_box: PanelContainer # the now-playing card; hidden until a video has been opened
 var settings_page: VBoxContainer
 var setup_page: VBoxContainer
 var setup_text: Label
@@ -81,6 +81,8 @@ var setup_bar: ProgressBar
 var setup_retry: Button
 var about_label: Label
 var settings_list: VBoxContainer
+var settings_scroll: ScrollContainer
+var _section_box: VBoxContainer # the card the next setting rows go into
 var topics_box: HFlowContainer # Browse: "Discover" topic pills
 var subs_btn: Button
 var speed_btn: Button
@@ -207,14 +209,18 @@ func _ready() -> void:
 	settings_page.size_flags_vertical = SIZE_EXPAND_FILL
 	settings_page.visible = false
 	root.add_child(settings_page)
-	var settings_scroll := ScrollContainer.new() # scrolls with the thumbstick / mouse wheel
+	settings_scroll = ScrollContainer.new() # scrolls with the thumbstick / mouse wheel
 	settings_scroll.size_flags_vertical = SIZE_EXPAND_FILL
 	settings_scroll.horizontal_scroll_mode = ScrollContainer.SCROLL_MODE_DISABLED
 	settings_page.add_child(settings_scroll)
+	var list_pad := MarginContainer.new() # keeps the buttons clear of the scrollbar
+	list_pad.size_flags_horizontal = SIZE_EXPAND_FILL
+	list_pad.add_theme_constant_override("margin_right", 22)
+	settings_scroll.add_child(list_pad)
 	settings_list = VBoxContainer.new()
 	settings_list.size_flags_horizontal = SIZE_EXPAND_FILL
-	settings_list.add_theme_constant_override("separation", 16)
-	settings_scroll.add_child(settings_list)
+	settings_list.add_theme_constant_override("separation", 10)
+	list_pad.add_child(settings_list)
 
 	_section("Watching")
 	_setting_row("resume", "Resume videos", "Start where you stopped last time")
@@ -222,7 +228,7 @@ func _ready() -> void:
 	_setting_row("autohide", "Hide the menu while watching", "Tucks the menu away a few seconds after a video starts")
 	_setting_row("topics", "Discover topics", "The one-tap searches above the video list. Save your own with \"+ Save\" after searching")
 	_setting_row("topics_reset", "Original topics", "Bring back the topics FrameTube came with (replaces your list)")
-	_setting_row("menu_size", "Menu size", "Press for preset sizes. Or squeeze grip on the menu to move it; grip it with both hands and pull apart / push together for any size")
+	_setting_row("menu_size", "Menu size", "Press for preset sizes, or grip the menu with both hands and pull apart / push together")
 	_setting_row("curve", "Screen shape", "Curve the screen around you, like a cinema")
 	_setting_row("subs_size", "Subtitle size", "How big subtitles are")
 	_setting_row("downloads", "Saved videos", "Videos you pressed Download on. Press to open their folder")
@@ -233,7 +239,7 @@ func _ready() -> void:
 	lang_box.add_theme_constant_override("h_separation", 8)
 	lang_box.add_theme_constant_override("v_separation", 8)
 	lang_box.visible = false
-	settings_list.add_child(lang_box)
+	_section_box.add_child(lang_box)
 	_section("Safety & account")
 	_setting_row("family", "Family-friendly filter",
 		"Hides videos with adult or gory words in them, and blocks 18+ videos")
@@ -323,18 +329,24 @@ func _ready() -> void:
 		b.add_theme_font_size_override("font_size", 34 if k.length() == 1 else 24)
 		pad.add_child(b)
 
-	# --- Now playing + player controls (always visible)
-	player_box = VBoxContainer.new()
-	player_box.add_theme_constant_override("separation", 12)
+	# --- Now playing + player controls: a card at the bottom, hidden until a video has been opened.
+	# Every control in it can shrink (text is cut with "..."), so long labels never widen the menu.
+	player_box = PanelContainer.new()
+	player_box.add_theme_stylebox_override("panel", _sb(Color(1, 1, 1, 0.035), 22, Color(1, 1, 1, 0.07), 1, 16))
 	player_box.visible = false
 	root.add_child(player_box)
+	var player := VBoxContainer.new()
+	player.add_theme_constant_override("separation", 10)
+	player_box.add_child(player)
 	var np := HBoxContainer.new()
-	player_box.add_child(np)
+	np.add_theme_constant_override("separation", 16)
+	player.add_child(np)
 	title_label = Label.new()
 	title_label.text_overrun_behavior = TextServer.OVERRUN_TRIM_ELLIPSIS
 	title_label.size_flags_horizontal = SIZE_EXPAND_FILL
+	title_label.custom_minimum_size.x = 50
 	title_label.text = "Nothing playing"
-	title_label.add_theme_font_size_override("font_size", 30)
+	title_label.add_theme_font_size_override("font_size", 28)
 	np.add_child(title_label)
 	status_label = Label.new()
 	status_label.add_theme_color_override("font_color", TEXT_DIM)
@@ -364,37 +376,37 @@ func _ready() -> void:
 	root.add_child(ask_bar)
 	root.move_child(ask_bar, 1) # right under the header, on every page
 
-	var seek_row := HBoxContainer.new()
-	player_box.add_child(seek_row)
+	time_label = Label.new()
+	time_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_RIGHT
+	time_label.add_theme_color_override("font_color", TEXT_DIM)
+	time_label.add_theme_font_size_override("font_size", 24)
+	np.add_child(time_label)
+
 	slider = HSlider.new()
 	slider.size_flags_horizontal = SIZE_EXPAND_FILL
-	slider.size_flags_vertical = SIZE_SHRINK_CENTER
-	slider.custom_minimum_size.y = 44
+	slider.custom_minimum_size.y = 40
 	slider.step = 0.1
 	slider.focus_mode = FOCUS_NONE
 	slider.drag_started.connect(func(): _dragging = true)
 	slider.drag_ended.connect(_on_drag_ended)
-	seek_row.add_child(slider)
-	time_label = Label.new()
-	time_label.custom_minimum_size.x = 250
-	time_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_RIGHT
-	time_label.add_theme_color_override("font_color", TEXT_DIM)
-	seek_row.add_child(time_label)
+	player.add_child(slider)
 
+	# Transport on the left, volume in the middle, menu actions on the right.
 	var ctl := HBoxContainer.new()
 	ctl.add_theme_constant_override("separation", 8)
-	player_box.add_child(ctl)
-	ctl.add_child(_button("-30s", func(): seek_relative.emit(-30.0)))
-	ctl.add_child(_button("-10s", func(): seek_relative.emit(-10.0)))
-	play_btn = _button("Play", func(): play_pause_pressed.emit())
+	player.add_child(ctl)
+	for sk in [["-30s", -30.0], ["-10s", -10.0]]:
+		ctl.add_child(_small_button(sk[0], 92, seek_relative.emit.bind(sk[1])))
+	play_btn = _small_button("Play", 140, func(): play_pause_pressed.emit())
 	play_btn.theme_type_variation = &"AccentButton"
-	play_btn.custom_minimum_size.x = 170
+	play_btn.remove_theme_stylebox_override("normal")
 	ctl.add_child(play_btn)
-	ctl.add_child(_button("+10s", func(): seek_relative.emit(10.0)))
-	ctl.add_child(_button("+30s", func(): seek_relative.emit(30.0)))
+	for sk in [["+10s", 10.0], ["+30s", 30.0]]:
+		ctl.add_child(_small_button(sk[0], 92, seek_relative.emit.bind(sk[1])))
 	ctl.add_child(_spacer())
 	var vol_label := Label.new()
 	vol_label.text = "Volume"
+	vol_label.add_theme_font_size_override("font_size", 22)
 	vol_label.add_theme_color_override("font_color", TEXT_DIM)
 	ctl.add_child(vol_label)
 	volume_slider = HSlider.new()
@@ -402,39 +414,45 @@ func _ready() -> void:
 	volume_slider.max_value = 1.0
 	volume_slider.step = 0.01
 	volume_slider.value = 1.0
-	volume_slider.custom_minimum_size = Vector2(220, 44)
+	volume_slider.custom_minimum_size = Vector2(160, 40)
 	volume_slider.size_flags_vertical = SIZE_SHRINK_CENTER
 	volume_slider.focus_mode = FOCUS_NONE
 	volume_slider.value_changed.connect(func(v: float): volume_changed.emit(v))
 	ctl.add_child(volume_slider)
 	ctl.add_child(_spacer())
-	download_btn = _button("Download", func(): download_pressed.emit())
+	download_btn = _small_button("Download", 185, func(): download_pressed.emit())
 	download_btn.tooltip_text = "Save this video to watch without internet"
 	ctl.add_child(download_btn)
-	ctl.add_child(_button("Recenter", func(): recenter_pressed.emit()))
-	ctl.add_child(_button("Hide menu", func(): hide_pressed.emit()))
+	ctl.add_child(_small_button("Recenter", 150, func(): recenter_pressed.emit()))
+	ctl.add_child(_small_button("Hide menu", 172, func(): hide_pressed.emit()))
 
+	# How the video is shown: tiles with a small caption over the current value, sharing the width.
 	var view := HBoxContainer.new()
 	view.add_theme_constant_override("separation", 8)
-	player_box.add_child(view)
-	proj_btn = _button("Type: Normal", func(): projection_pressed.emit())
-	proj_btn.size_flags_horizontal = SIZE_EXPAND_FILL
-	view.add_child(proj_btn)
-	screen_btn = _button("Screen: M", func(): screen_size_pressed.emit())
-	view.add_child(screen_btn)
-	view.add_child(_button("Reset", func(): reset_screen_pressed.emit()))
-	quality_btn = _button("Quality: 4K", func(): quality_pressed.emit())
-	view.add_child(quality_btn)
-	subs_btn = _button("Subtitles: Off", func(): subs_pressed.emit())
-	view.add_child(subs_btn)
-	speed_btn = _button("Speed: 1×", func(): speed_pressed.emit())
-	view.add_child(speed_btn)
-	swap_btn = CheckButton.new()
-	swap_btn.text = "Swap eyes"
-	swap_btn.tooltip_text = "Fixes 3D that looks inside out"
-	swap_btn.focus_mode = FOCUS_NONE
-	swap_btn.toggled.connect(func(on: bool): swap_eyes_toggled.emit(on))
-	view.add_child(swap_btn)
+	player.add_child(view)
+	proj_btn = _tile("Video type", func(): projection_pressed.emit(), 1.6)
+	quality_btn = _tile("Quality", func(): quality_pressed.emit())
+	subs_btn = _tile("Subtitles", func(): subs_pressed.emit(), 1.3)
+	speed_btn = _tile("Speed", func(): speed_pressed.emit(), 0.7)
+	screen_btn = _tile("Screen size", func(): screen_size_pressed.emit(), 0.8)
+	swap_btn = _tile("3D eyes", func(): pass, 0.8)
+	swap_btn.toggle_mode = true
+	swap_btn.tooltip_text = "Swap the eyes if 3D looks inside out"
+	swap_btn.toggled.connect(func(on: bool):
+		_set_tile(swap_btn, "Swapped" if on else "Normal")
+		swap_eyes_toggled.emit(on))
+	for b in [proj_btn, quality_btn, subs_btn, speed_btn, screen_btn, swap_btn]:
+		view.add_child(b)
+	var reset := _tile("Screen", func(): reset_screen_pressed.emit(), 0.7)
+	reset.tooltip_text = "Put the screen back in front of you"
+	_set_tile(reset, "Reset")
+	view.add_child(reset)
+	set_projection_name("Normal")
+	set_quality(0)
+	set_subs_label("Off")
+	set_speed_label("1×")
+	set_screen_size("M")
+	set_swap(false)
 
 	keyboard = _build_keyboard()
 	keyboard.visible = false
@@ -658,7 +676,20 @@ func set_title(text: String) -> void:
 
 
 func set_projection_name(text: String) -> void:
-	proj_btn.text = "Type: " + text
+	_set_tile(proj_btn, text)
+
+
+func set_subs_label(text: String) -> void:
+	_set_tile(subs_btn, text)
+
+
+func set_speed_label(text: String) -> void:
+	_set_tile(speed_btn, text)
+
+
+func set_swap(on: bool) -> void:
+	swap_btn.set_pressed_no_signal(on)
+	_set_tile(swap_btn, "Swapped" if on else "Normal")
 
 
 ## height 0 = Auto; `playing` (smaller side of the current video, 0 = none) is shown next to "Auto".
@@ -666,7 +697,7 @@ func set_quality(height: int, playing := 0) -> void:
 	var t: String = QUALITY_NAMES.get(height, "%dp" % height)
 	if height == 0 and playing > 0:
 		t += " (%s)" % quality_name(playing)
-	quality_btn.text = "Quality: " + t
+	_set_tile(quality_btn, t)
 
 
 ## 3840 -> "8K", 1920 -> "4K", ... (by the video's smaller side, as yt-dlp's "res" counts it).
@@ -688,7 +719,7 @@ func set_account(label: String) -> void:
 
 
 func set_screen_size(label: String) -> void:
-	screen_btn.text = "Screen: " + label
+	_set_tile(screen_btn, label)
 
 
 func set_setting(key: String, value: String) -> void:
@@ -985,22 +1016,36 @@ func _setting_row(key: String, title: String, hint: String) -> void:
 	labels.add_child(h)
 	row.add_child(labels)
 	var b := _button("-", _on_setting.bind(key))
-	b.custom_minimum_size.x = 300
+	b.custom_minimum_size = Vector2(270, 58)
 	b.size_flags_vertical = SIZE_SHRINK_CENTER
+	b.text_overrun_behavior = TextServer.OVERRUN_TRIM_ELLIPSIS
 	row.add_child(b)
 	_setting_btns[key] = b
-	settings_list.add_child(row)
+	if _section_box.get_child_count() > 0:
+		var line := ColorRect.new() # hairline between rows
+		line.color = Color(1, 1, 1, 0.06)
+		line.custom_minimum_size.y = 1
+		line.mouse_filter = MOUSE_FILTER_IGNORE
+		_section_box.add_child(line)
+	_section_box.add_child(row)
 
 
+## A heading and a rounded card that the following _setting_row()s go into.
 func _section(title: String) -> void:
 	var l := Label.new()
-	l.text = title
-	l.add_theme_font_size_override("font_size", 24)
+	l.text = title.to_upper()
+	l.add_theme_font_size_override("font_size", 20)
 	l.set_meta("accent_text", true)
 	l.add_theme_color_override("font_color", accent)
 	if settings_list.get_child_count() > 0:
-		settings_list.add_child(_gap(10))
+		settings_list.add_child(_gap(8))
 	settings_list.add_child(l)
+	var card := PanelContainer.new()
+	card.add_theme_stylebox_override("panel", _sb(Color(1, 1, 1, 0.035), 18, Color(1, 1, 1, 0.06), 1, 18))
+	settings_list.add_child(card)
+	_section_box = VBoxContainer.new()
+	_section_box.add_theme_constant_override("separation", 12)
+	card.add_child(_section_box)
 
 
 func _gap(h: int) -> Control:
@@ -1033,6 +1078,51 @@ func _on_drag_ended(_changed: bool) -> void:
 func _paste() -> void:
 	input.text = DisplayServer.clipboard_get().strip_edges()
 	input.caret_column = input.text.length()
+
+
+## A button that never grows wider than `width`: longer text is cut with "...".
+func _small_button(text: String, width: float, cb: Callable) -> Button:
+	var b := _button(text, cb)
+	b.custom_minimum_size = Vector2(width, 60)
+	b.text_overrun_behavior = TextServer.OVERRUN_TRIM_ELLIPSIS
+	b.add_theme_font_size_override("font_size", 24)
+	return b
+
+
+## A two-line button: a small dim caption over its value. It shares the row's width (by `ratio`) and
+## cuts a long value with "..." instead of widening the row.
+func _tile(caption: String, cb: Callable, ratio := 1.0) -> Button:
+	var b := _button("", cb)
+	b.custom_minimum_size = Vector2(60, 76)
+	b.size_flags_horizontal = SIZE_EXPAND_FILL
+	b.size_flags_stretch_ratio = ratio
+	b.clip_contents = true
+	var box := VBoxContainer.new()
+	box.set_anchors_and_offsets_preset(PRESET_FULL_RECT)
+	box.offset_left = 14
+	box.offset_right = -14
+	box.alignment = BoxContainer.ALIGNMENT_CENTER
+	box.add_theme_constant_override("separation", -2)
+	b.add_child(box)
+	var cap := Label.new()
+	cap.text = caption
+	cap.add_theme_font_size_override("font_size", 17)
+	cap.add_theme_color_override("font_color", TEXT_DIM)
+	cap.text_overrun_behavior = TextServer.OVERRUN_TRIM_ELLIPSIS
+	cap.custom_minimum_size.x = 10
+	box.add_child(cap)
+	var val := Label.new()
+	val.add_theme_font_size_override("font_size", 23)
+	val.text_overrun_behavior = TextServer.OVERRUN_TRIM_ELLIPSIS
+	val.custom_minimum_size.x = 10
+	box.add_child(val)
+	_ignore_mouse(box)
+	b.set_meta("value_label", val)
+	return b
+
+
+func _set_tile(b: Button, value: String) -> void:
+	(b.get_meta("value_label") as Label).text = value
 
 
 func _button(text: String, cb: Callable) -> Button:

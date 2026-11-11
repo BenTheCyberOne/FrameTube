@@ -233,7 +233,7 @@ func _run_autotest() -> void:
 		print("[langs] keep for a Japanese video: ", Downloads.pick_subs(tracks, downloads.save_langs, "ja").map(func(t): return t.name))
 		print("[langs] keep with All: ", Downloads.pick_subs(tracks, ["all"], "ja").size(), "  with none: ", Downloads.pick_subs(tracks, [], "ja").size())
 		await get_tree().create_timer(0.5).timeout
-		(ui.lang_box.get_parent().get_parent() as ScrollContainer).ensure_control_visible(ui.lang_box)
+		ui.settings_scroll.ensure_control_visible(ui.lang_box)
 		await get_tree().create_timer(0.5).timeout
 		if opts.has("shots"):
 			await RenderingServer.frame_post_draw
@@ -241,6 +241,37 @@ func _run_autotest() -> void:
 		_toggle_save_lang("all")
 		print("[langs] after All: %s label=%s" % [downloads.save_langs, ui._setting_btns["subs_save"].text])
 		await get_tree().create_timer(0.5).timeout
+		get_tree().quit()
+		return
+	if opts.has("ui-test"):
+		# --ui-test [--shots=dir]: the player controls with the longest labels they can get; the menu
+		# must still fit its 1500 px (anything wider is cut off on the right and can't be clicked).
+		store.persist = false
+		panel.visible = true
+		_place_panel()
+		var longest := ""
+		for n: String in PROJECTIONS:
+			longest = n if n.length() > longest.length() else longest
+		ui.player_box.visible = true
+		ui.set_title("An extremely long video title that goes on and on: 8K 360° VR tour of somewhere far away")
+		ui.update_playback(4000.0, 7322.0, false, true)
+		ui.set_projection_name(longest)
+		ui.set_quality(0, 2880)
+		ui.set_subs_label("English (auto-generated) from Japanese")
+		ui.set_speed_label("1.75×")
+		ui.set_swap(true)
+		ui.download_btn.text = "Saving 45% of 3.2 GB"
+		ui.set_status("Found 40 videos (3 hidden by the family filter). Scroll down for more.")
+		_on_feed("history")
+		for page: bool in [false, true]:
+			ui.show_page(page)
+			await get_tree().create_timer(0.6).timeout
+			await RenderingServer.frame_post_draw
+			var need := ui.get_combined_minimum_size().x
+			print("[ui] page=%s needs %.0f px of %d -> %s" % ["settings" if page else "browse", need, PANEL_PX.x,
+				"fits" if need <= PANEL_PX.x else "TOO WIDE"])
+			if opts.has("shots"):
+				viewport.get_texture().get_image().save_png(str(opts.shots).path_join("ui_%s.png" % ("settings" if page else "browse")))
 		get_tree().quit()
 		return
 	if opts.has("cards-test"):
@@ -378,6 +409,8 @@ func _run_autotest() -> void:
 		_place_panel()
 	if opts.has("env"):
 		envs.set_style(int(opts.env))
+	if opts.has("reset-screen"): # the default screen size and spot, whatever the saved one is
+		rig.reset(camera.global_position.y)
 	if opts.has("toy"):
 		toy.set_shape(int(opts.toy))
 	if opts.has("accent"):
@@ -1181,7 +1214,7 @@ func _load_settings() -> void:
 	engine.decoder_index = engine.preferred_decoder
 	ui.set_decoder(VideoEngine._decoder_label(engine.decoders[engine.decoder_index]))
 	var swap := bool(store.get_setting("swap_eyes", false))
-	ui.swap_btn.set_pressed_no_signal(swap)
+	ui.set_swap(swap)
 	video_mat.set_shader_parameter("swap_eyes", swap)
 	_apply_account()
 	accent_idx = clampi(int(store.get_setting("accent_idx", 0)), 0, ACCENTS.size() - 1)
@@ -1257,18 +1290,18 @@ func _on_subs_loaded(ok: bool) -> void:
 
 func _refresh_subs_label() -> void:
 	if subs_tracks.is_empty():
-		ui.subs_btn.text = "Subtitles: none"
+		ui.set_subs_label("None")
 	elif subs_idx < 0:
-		ui.subs_btn.text = "Subtitles: Off"
+		ui.set_subs_label("Off")
 	else:
-		ui.subs_btn.text = "Subs: " + str(subs_tracks[subs_idx].name)
+		ui.set_subs_label(str(subs_tracks[subs_idx].name))
 
 
 func _cycle_speed() -> void:
 	speed_idx = (speed_idx + 1) % SPEEDS.size()
 	var s: float = SPEEDS[speed_idx]
 	engine.set_speed(s)
-	ui.speed_btn.text = "Speed: %s×" % (("%.2f" % s).rstrip("0").rstrip("."))
+	ui.set_speed_label("%s×" % (("%.2f" % s).rstrip("0").rstrip(".")))
 
 
 # --- Parental lock (PIN) ------------------------------------------------------------------------

@@ -3,9 +3,8 @@
 Watch YouTube and YouTube VR videos (360°, 180°, 3D) in your Steam Frame, either streamed from a PC or
 running on the headset by itself. Free and open source (MIT).
 
-**This is an early release.** It's been used and tested on Windows with a Steam Frame over SteamVR streaming.
-The standalone Steam Frame build (Linux ARM64) hasn't been tried on the headset yet. Please report what works
-and what doesn't.
+**This is an early release.** It's been tested on Windows with a Steam Frame over SteamVR streaming, and
+standalone on the Steam Frame (Linux ARM64). Please report what works and what doesn't.
 
 ## Downloads
 
@@ -46,7 +45,7 @@ recognised (it isn't code-signed): choose **More info > Run anyway**.
 - Family-friendly filter (on by default) and a parental PIN lock.
 
 ## Known limitations
-- Not tested on the Steam Frame by itself yet; controller buttons there go through SteamVR's default bindings.
+- On the Frame by itself, controller buttons go through SteamVR's default bindings for the app.
 - 8K at 60 fps tops out around 30 fps (Auto picks 5.7K or 4K for those).
 - 3D cubemap 360 videos aren't supported yet.
 - Sending videos needs FrameTube open on both devices, on the same network.

@@ -69,7 +69,7 @@ IF SOMETHING GOES WRONG
 - Age-restricted videos, your subscriptions, Watch later: open Settings and press "Sign in".
   A browser window opens; sign in to YouTube there and it closes by itself.
   Do this in Desktop Mode, and install Firefox first if you don't have it (Discover store).
-- The 3D looks "inside out": turn on "Swap eyes".
+- The 3D looks "inside out": press "3D eyes" (under the player) to swap them.
 
 FORGOT THE PARENTAL PIN?
 ------------------------
