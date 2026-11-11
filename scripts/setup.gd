@@ -53,7 +53,7 @@ static func missing_tools() -> PackedStringArray:
 	for t in ["yt-dlp", "ffmpeg", "deno"]:
 		if Bin.find_local(t) != "":
 			continue
-		if t != "deno" and Bin.run(t, PackedStringArray(["--version" if t == "yt-dlp" else "-version"])).code != -1:
+		if t != "deno" and Bin.run(t, PackedStringArray(["--version" if t == "yt-dlp" else "-version"])).code == 0:
 			continue # on PATH (deno is optional when absent locally: yt-dlp also looks for it on PATH)
 		missing.append(t)
 	return missing
@@ -146,8 +146,7 @@ func _install_one(tool_name: String, m: Array) -> String:
 	DirAccess.remove_absolute(archive)
 	if err != "":
 		return "Couldn't install the %s: %s" % [nice, err]
-	if OS.get_name() != "Windows":
-		OS.execute("chmod", PackedStringArray(["+x", dest]))
+	Bin.make_executable(dest)
 	return ""
 
 

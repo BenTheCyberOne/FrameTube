@@ -20,6 +20,7 @@ static func find_local(tool_name: String) -> String:
 	for d in dirs:
 		var p := d.path_join(exe)
 		if FileAccess.file_exists(p):
+			make_executable(p)
 			return p
 	return ""
 
@@ -43,8 +44,26 @@ static func run(tool_name: String, args: PackedStringArray) -> Dictionary:
 	p.stderr.close()
 	while OS.is_process_running(p.pid):
 		OS.delay_msec(5)
-	return {"code": OS.get_process_exit_code(p.pid), "out": out.get_string_from_utf8(),
-		"err": err.get_string_from_utf8()}
+	var code := OS.get_process_exit_code(p.pid)
+	var err_text := err.get_string_from_utf8()
+	# Linux/macOS: when the program can't be started, Godot's child process prints this and kills itself
+	# (exit code 9). Report it as "couldn't start", the same as on Windows.
+	if err_text.begins_with("Could not create child process"):
+		code = -1
+	return {"code": code, "out": out.get_string_from_utf8(), "err": err_text}
+
+
+## Linux/macOS: gives a file the "run" permission (rwxr-xr-x) if it's missing. If a program can't be started,
+## Godot's child process kills itself, which shows up as exit code 9 with no output at all.
+static func make_executable(path: String) -> void:
+	if OS.get_name() == "Windows" or not FileAccess.file_exists(path):
+		return
+	var perms := FileAccess.get_unix_permissions(path)
+	if perms & FileAccess.UNIX_EXECUTE_OWNER:
+		return
+	var err := FileAccess.set_unix_permissions(path, perms | 0x1ED) # 0755
+	if err != OK:
+		push_warning("Couldn't make %s runnable (error %d)" % [path, err])
 
 
 static func _read_all(f: FileAccess) -> PackedByteArray:

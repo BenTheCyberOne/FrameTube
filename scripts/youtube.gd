@@ -401,6 +401,9 @@ static func _run_json(args: PackedStringArray) -> Variant:
 			errors.append(line)
 	if not errors.is_empty():
 		return "\n".join(errors)
+	var tail: String = res.err.strip_edges().right(600)
+	if tail != "":
+		push_warning("yt-dlp stderr: " + tail)
 	return "yt-dlp failed (exit code %d). Try updating it (yt-dlp -U)." % code
 
 
